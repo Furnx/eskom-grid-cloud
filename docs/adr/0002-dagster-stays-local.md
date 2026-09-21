@@ -1,7 +1,7 @@
 # 0002. Dagster stays local; Step Functions orchestrates production
 
 Date: 2026-09-21
-Status: Proposed
+Status: Acceptted
 
 ## Context
 

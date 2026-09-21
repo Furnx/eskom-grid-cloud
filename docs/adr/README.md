@@ -23,6 +23,6 @@ Format (after Michael Nygard): see [template.md](template.md).
 | # | Title | Status |
 |---|---|---|
 | [0001](0001-serverless-over-always-on-vm.md) | Serverless compute instead of an always-on VM | Accepted |
-| [0002](0002-dagster-stays-local.md) | Dagster stays local; Step Functions orchestrates production | Proposed |
+| [0002](0002-dagster-stays-local.md) | Dagster stays local; Step Functions orchestrates production | Accepted |
 | [0003](0003-zero-cost-constraints.md) | Zero-cost constraints and the AWS Free Plan | Accepted |
 | [0004](0004-iam-user-over-identity-center.md) | IAM user instead of IAM Identity Center | Accepted |
