@@ -21,11 +21,16 @@ Goal: an AWS account that is safe to build in and cannot cost money.
 
 Goal: raw JSON lands in S3 every hour with the laptop switched off.
 
-**1a — Application seam** (in [eskom-grid-observability](https://github.com/Furnx/eskom-grid-observability)):
-- [ ] Extraction logic pulled out of the `@asset` body into pure functions; the decorator becomes a thin wrapper
-- [ ] Storage-sink abstraction: local path or `s3://…`, selected by environment variable
-- [ ] dbt `prod` target in `profiles.yml.example`; source `external_location` from `env_var()`
-- [ ] Repository pip-installable (`src/` package, `[project]` metadata); first release tag
+**1a — Application seam** ✅ 2026-09-22 — [eskom-grid-observability@v0.1.0](https://github.com/Furnx/eskom-grid-observability/releases/tag/v0.1.0):
+- [x] Extraction logic pulled out of the `@asset` body into pure functions; the decorator becomes a thin wrapper
+- [x] Storage-sink abstraction: local path or `s3://…`, selected by environment variable (`ESKOM_RAW_SINK`)
+- [x] dbt `prod` target in `profiles.yml.example`; source `external_location` from `env_var("ESKOM_RAW_GLOB")`
+- [x] Repository pip-installable (`src/` package, `[project]` metadata); first release tag `v0.1.0`
+
+Verified by installing the tag into a clean interpreter outside the repository:
+only `requests` and `pyyaml` came with it — no Dagster, dbt or DuckDB — and the
+packaged area portfolio loaded. That is exactly what the Lambda image will do.
+The application repository also carries a test asserting this boundary holds.
 
 **1b — By hand, once** (console, to see the parts before automating them):
 - [ ] S3 bucket: versioning on, public access blocked
