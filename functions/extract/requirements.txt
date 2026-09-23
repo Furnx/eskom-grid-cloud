@@ -1,0 +1,14 @@
+# Runtime dependencies installed into the Lambda zip.
+#
+# These mirror the [project].dependencies of eskom-grid. They are listed again
+# here because the package itself is installed from a git tag (a source
+# distribution), which cannot be combined with pip's --platform flag; the
+# dependencies therefore have to be fetched separately as Linux/arm64 wheels.
+# If the application ever gains a core dependency, add it here too — the
+# smoke test in scripts/build_lambda.ps1 will catch a missing one.
+#
+# boto3 is NOT listed: the Lambda Python runtime already provides it, and
+# bundling it would only make the package larger.
+
+requests>=2.31
+pyyaml>=6.0
