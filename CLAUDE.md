@@ -66,6 +66,18 @@ It is **not** the application. No extraction logic, dbt models or tests live her
   status line and diagrams current.
 - Tag every AWS resource `project = eskom-grid`.
 
+## Working with this user
+
+- **Never run `git commit`, `git tag` or `git push`.** Make the file changes, run the
+  verification, then hand over a suggested commit message. Approving a plan that lists
+  "commit 1 / commit 2" means "make those changes", not "commit them".
+- They are learning cloud engineering from zero and want to understand, not just ship:
+  investigate, explain what matters, propose a plan, and wait for approval before
+  changing files. Their global CLAUDE.md has the full workflow.
+- **Owed deliverable:** a comprehensive, entertaining, assumes-no-prior-knowledge guide
+  to this project (AWS, Terraform, IAM, Lambda, S3, and why each piece exists), grounded
+  in these actual files rather than generic tutorials. Requested 2026-09-23.
+
 ## Where things are
 
 - Plan and status: `docs/ROADMAP.md` — read this first in every session.
@@ -74,6 +86,15 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 
 ## Current phase
 
-Phase 1 — landing zone in the cloud. Sub-steps: 1a application seam in the
-companion repo; 1b hello-world Lambda → S3 built by hand in the console, then
-deleted; 1c the same, with real extraction code, in Terraform.
+Phase 1 complete as of 2026-09-23 and deployed:
+`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.1.0),
+`eskom-grid-hourly` (EventBridge Scheduler) - all live in af-south-1 and
+writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
+`infra/terraform.tfstate` (git-ignored).
+
+Build before planning: `./scripts/build_lambda.ps1`, then `cd infra; terraform plan`.
+`archive_file` is a data source read at plan time, so `build/lambda/` must exist first.
+
+Next: Phase 2 - the transform (dbt) function. It needs changes in the companion
+repo too: `pipeline_run_log` and `fct_pipeline_runs` still assume a local disk
+and a DuckDB table that dbt does not create.
