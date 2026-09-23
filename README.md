@@ -114,7 +114,78 @@ Estimated steady state on a paid plan after the Free Plan window (~March 2027): 
 
 ## Deploy / destroy
 
-Available from Phase 1. Until then, nothing is deployed.
+Prerequisites: AWS CLI v2 with the `eskom-admin` profile, Terraform >= 1.6,
+Python 3.13 with `pip`, and an EskomSePush API key.
+
+### One-time: store the API key
+
+The key is kept in SSM Parameter Store and is deliberately **not** managed by
+Terraform, so its value never enters the configuration or the state file.
+Create it once:
+
+```powershell
+aws ssm put-parameter `
+  --name "/eskom-grid/api-key" `
+  --type SecureString `
+  --value "<your EskomSePush key>" `
+  --profile eskom-admin --region af-south-1
+```
+
+`terraform destroy` does not remove it, so this step is not repeated.
+
+### Deploy
+
+```powershell
+# 1. Build the Lambda package from the pinned application tag.
+#    archive_file is read at plan time, so this must come first.
+./scripts/build_lambda.ps1
+
+# 2. Review and apply.
+cd infra
+terraform init      # first time only
+terraform plan      # read this before applying
+terraform apply
+```
+
+`terraform apply` prints the bucket, function, log group and a set of
+copy-paste verification commands.
+
+### Verify
+
+```powershell
+# Invoke once (costs 2 of the 50 daily EskomSePush requests)
+aws lambda invoke --function-name eskom-grid-extract `
+  --profile eskom-admin --region af-south-1 response.json; cat response.json
+
+# One object per area, all sharing a run timestamp
+aws s3 ls s3://eskom-grid-<account-id>/raw/ --recursive --profile eskom-admin
+
+# Logs
+aws logs tail /aws/lambda/eskom-grid-extract --since 15m `
+  --profile eskom-admin --region af-south-1
+```
+
+### Destroy
+
+```powershell
+cd infra
+terraform destroy
+```
+
+S3 refuses to delete a bucket that still holds objects, so empty it first if
+you want the teardown to succeed in one pass:
+
+```powershell
+aws s3 rm s3://eskom-grid-<account-id>/ --recursive --profile eskom-admin
+```
+
+### API quota
+
+The EskomSePush free tier allows 50 requests per day. This deployment uses one
+request per area per run: two areas, hourly, is 48 per day. **Keep the local
+Dagster schedule switched off while the cloud deployment is running** - both
+together would exceed the quota and the extraction would start failing with
+HTTP 429.
 
 ## Decisions
 
