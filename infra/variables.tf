@@ -26,7 +26,7 @@ variable "app_version" {
     build script takes the same value. Never point this at a branch.
   EOT
   type        = string
-  default     = "v0.1.0"
+  default     = "v0.2.0"
 }
 
 variable "api_key_parameter_name" {
