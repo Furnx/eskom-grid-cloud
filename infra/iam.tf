@@ -37,8 +37,11 @@ locals {
   api_key_parameter_arn = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${var.api_key_parameter_name}"
 }
 
-# A SecureString is encrypted with the AWS-managed key aws/ssm, so reading it
-# needs kms:Decrypt on that key in addition to ssm:GetParameter. The key is
+# A SecureString is encrypted with the AWS-managed key aws/ssm. That key's own
+# policy (written by AWS) already lets any principal in this account decrypt
+# through SSM, so the kms:Decrypt statement below is not strictly required; it
+# is kept so the dependency on KMS is visible here rather than only in a policy
+# AWS manages. It would be required for a customer-managed key. The key is
 # created by AWS the first time a SecureString is stored — which is why the
 # parameter must exist before the first plan.
 data "aws_kms_alias" "ssm" {

@@ -54,4 +54,14 @@ resource "aws_lambda_function" "extract" {
   # Without this, Lambda may create the log group itself on first invocation
   # and Terraform's group creation then conflicts with it.
   depends_on = [aws_cloudwatch_log_group.extract]
+
+  lifecycle {
+    # The description above claims var.app_version, but the code comes from
+    # whatever the build script installed. Refuse to plan if the two disagree,
+    # rather than deploy one version under the other's label.
+    precondition {
+      condition     = try(trimspace(file("${path.module}/../build/app_version.txt")), "") == var.app_version
+      error_message = "build/ was not built from app_version ${var.app_version} (or the build did not finish). Run ./scripts/build_lambda.ps1 and plan again."
+    }
+  }
 }

@@ -17,16 +17,18 @@
     would fail at import time in the cloud.
 
 .PARAMETER AppVersion
-    Git tag of eskom-grid-observability to deploy. Must match app_version in
-    infra/variables.tf.
+    Git tag of eskom-grid-observability to deploy. Defaults to the app_version
+    default in infra/variables.tf, which is the single source of truth. The tag
+    built is recorded in build/app_version.txt, and a precondition in
+    infra/compute.tf fails the plan if it differs from var.app_version.
 
 .EXAMPLE
     ./scripts/build_lambda.ps1
-    ./scripts/build_lambda.ps1 -AppVersion v0.2.0
+    ./scripts/build_lambda.ps1 -AppVersion v0.3.0   # only after updating variables.tf
 #>
 
 param(
-    [string]$AppVersion = "v0.1.0",
+    [string]$AppVersion,
     [string]$PythonVersion = "3.13",
     [string]$Platform = "manylinux2014_aarch64"
 )
@@ -35,8 +37,16 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BuildDir = Join-Path $RepoRoot "build\lambda"
+$VersionFile = Join-Path $RepoRoot "build\app_version.txt"
 $FunctionDir = Join-Path $RepoRoot "functions\extract"
 $AppRepo = "https://github.com/Furnx/eskom-grid-observability"
+
+if (-not $AppVersion) {
+    $variables = Get-Content (Join-Path $RepoRoot "infra\variables.tf") -Raw
+    $match = [regex]::Match($variables, '(?s)variable\s+"app_version"\s*\{.*?default\s*=\s*"([^"]+)"')
+    if (-not $match.Success) { throw "Could not read the app_version default from infra/variables.tf." }
+    $AppVersion = $match.Groups[1].Value
+}
 
 Write-Host "Building extract Lambda package" -ForegroundColor Cyan
 Write-Host "  app version : $AppVersion"
@@ -44,8 +54,10 @@ Write-Host "  target      : $Platform / python $PythonVersion"
 Write-Host "  output      : $BuildDir"
 Write-Host ""
 
-# Start clean so a removed dependency cannot survive in the zip.
+# Start clean so a removed dependency cannot survive in the zip, and so a
+# failed build leaves no version record behind to vouch for it.
 if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
+if (Test-Path $VersionFile) { Remove-Item -Force $VersionFile }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
 Write-Host "[1/3] Installing eskom-grid@$AppVersion (no dependencies)..." -ForegroundColor Yellow
@@ -78,6 +90,10 @@ if ($missing) { throw "Build is missing: $($missing -join ', ')" }
 if (Test-Path (Join-Path $BuildDir "dagster")) {
     throw "Dagster found in the Lambda package  -  the dependency boundary has been broken."
 }
+
+# Record what was built, next to (not inside) the package so the zip is
+# unaffected. infra/compute.tf compares it with var.app_version at plan time.
+Set-Content -Path $VersionFile -Value $AppVersion -NoNewline
 
 $sizeMb = [math]::Round((Get-ChildItem $BuildDir -Recurse -File |
     Measure-Object -Property Length -Sum).Sum / 1MB, 2)

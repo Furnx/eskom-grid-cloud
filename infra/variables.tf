@@ -22,8 +22,9 @@ variable "project_name" {
 variable "app_version" {
   description = <<-EOT
     Git tag of eskom-grid-observability that the Lambda package is built from.
-    Recorded here so the deployed application version is visible in code; the
-    build script takes the same value. Never point this at a branch.
+    The single source of truth: the build script reads this default, and a
+    precondition in compute.tf fails the plan if build/ holds a different
+    version. Never point this at a branch.
   EOT
   type        = string
   default     = "v0.2.0"
