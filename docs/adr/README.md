@@ -26,3 +26,4 @@ Format (after Michael Nygard): see [template.md](template.md).
 | [0002](0002-dagster-stays-local.md) | Dagster stays local; Step Functions orchestrates production | Accepted |
 | [0003](0003-zero-cost-constraints.md) | Zero-cost constraints and the AWS Free Plan | Accepted |
 | [0004](0004-iam-user-over-identity-center.md) | IAM user instead of IAM Identity Center | Accepted |
+| [0005](0005-raw-history-outlives-infrastructure.md) | Raw history outlives the infrastructure | Accepted |

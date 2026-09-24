@@ -168,17 +168,49 @@ aws logs tail /aws/lambda/eskom-grid-extract --since 15m `
 
 ### Destroy
 
+`terraform destroy` removes infrastructure, never history
+([ADR 0005](docs/adr/0005-raw-history-outlives-infrastructure.md)). The raw
+bucket holds the only copy of data the API cannot return again, so S3's refusal
+to delete a bucket that still holds data is kept as a safety catch.
+
+**A plain `terraform destroy`** removes the schedule, function, roles and log
+group, then stops with `BucketNotEmpty`. The history is intact, but the bucket
+has lost its public access block, lifecycle rule and versioning;
+`terraform apply` restores them along with everything else.
+
+**A full teardown, history included**, is three deliberate steps. Start just
+after a scheduled run (around hh:02), so that no new object lands between
+steps 2 and 3:
+
 ```powershell
+# 1. Back up the history, outside the repository.
+aws s3 sync s3://eskom-grid-<account-id>/raw/ "$HOME\eskom-grid-backup\<date>\raw" --profile eskom-admin
+
+# 2. Delete every object version. The bucket is versioned, so `aws s3 rm`
+#    would only add delete markers. Add -DryRun to see what would go.
+./scripts/purge_bucket.ps1 -Bucket eskom-grid-<account-id>
+
+# 3. Remove the infrastructure.
 cd infra
 terraform destroy
 ```
 
-S3 refuses to delete a bucket that still holds objects, so empty it first if
-you want the teardown to succeed in one pass:
+Left in place on purpose: the SSM parameter holding the API key (created
+outside Terraform) and your local backup.
+
+### Rebuild and restore
 
 ```powershell
-aws s3 rm s3://eskom-grid-<account-id>/ --recursive --profile eskom-admin
+./scripts/build_lambda.ps1
+cd infra
+terraform apply
+aws s3 sync "$HOME\eskom-grid-backup\<date>\raw" s3://eskom-grid-<account-id>/raw/ --profile eskom-admin
 ```
+
+If `apply` fails on the bucket with `OperationAborted`, S3 has not yet released
+the name of the bucket that was just deleted: wait a few minutes and run
+`terraform apply` again. Restored objects keep their keys, and the run
+timestamp is part of the key, so the history continues where it stopped.
 
 ### API quota
 

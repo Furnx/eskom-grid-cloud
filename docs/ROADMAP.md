@@ -33,11 +33,11 @@ packaged area portfolio loaded. That is exactly what the Lambda image will do.
 The application repository also carries a test asserting this boundary holds.
 
 **1b — By hand, once** (console, to see the parts before automating them):
-- [ ] S3 bucket: versioning on, public access blocked
-- [ ] Hello-world Lambda that writes one object into the bucket
-- [ ] Execution role with `s3:PutObject` on one prefix only
-- [ ] EventBridge Scheduler rule invoking it hourly
-- [ ] All of it deleted again
+- [x] S3 bucket: versioning on, public access blocked
+- [x] Hello-world Lambda that writes one object into the bucket
+- [x] Execution role with `s3:PutObject` on one prefix only
+- [x] EventBridge Scheduler rule invoking it hourly
+- [x] All of it deleted again
 
 **1c — In Terraform** (`infra/`):
 - [ ] Provider, bucket, extract Lambda with the real code, least-privilege role, SSM parameter for the API key, hourly schedule
