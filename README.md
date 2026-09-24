@@ -136,8 +136,9 @@ aws ssm put-parameter `
 ### Deploy
 
 ```powershell
-# 1. Build the Lambda package from the pinned application tag.
-#    archive_file is read at plan time, so this must come first.
+# 1. Build the Lambda package from the pinned application tag (app_version
+#    in infra/variables.tf). archive_file is read at plan time, so this must
+#    come first; the plan also refuses a build made from a different version.
 ./scripts/build_lambda.ps1
 
 # 2. Review and apply.

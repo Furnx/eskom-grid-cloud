@@ -39,3 +39,7 @@ desktop.ini
 
 # Lambda build artefacts
 build/
+
+# Output file of `aws lambda invoke` (the README's verify step writes it to the
+# current directory). It records one run's result and does not belong in git.
+response.json
