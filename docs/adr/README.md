@@ -27,3 +27,5 @@ Format (after Michael Nygard): see [template.md](template.md).
 | [0003](0003-zero-cost-constraints.md) | Zero-cost constraints and the AWS Free Plan | Accepted |
 | [0004](0004-iam-user-over-identity-center.md) | IAM user instead of IAM Identity Center | Accepted |
 | [0005](0005-raw-history-outlives-infrastructure.md) | Raw history outlives the infrastructure | Accepted |
+| [0006](0006-transform-reads-only-new-raw-files.md) | The transform reads only new raw files | Accepted |
+| [0007](0007-single-writer-for-the-warehouse.md) | One writer for the warehouse, enforced by S3 conditional writes | Accepted |
