@@ -105,6 +105,9 @@ destroy`; the README has the rebuild-and-restore steps.
 Open follow-up: Lambda's default async retries apply despite the schedule's
 retry 0 (Phase 3).
 
-Next: Phase 2 - the transform (dbt) function. It needs changes in the companion
-repo too: `pipeline_run_log` and `fct_pipeline_runs` still assume a local disk
-and a DuckDB table that dbt does not create.
+Next: Phase 2 - the transform (dbt) function. Planned, approved and spiked on
+2026-09-24: read `docs/PHASE2_PLAN.md` first. Part A happens in the companion
+repo (a session opened there) and ends with tag `v0.3.0`; Part B happens here
+after that tag exists. Key decisions: ADR 0006 (only new raw files are read -
+the cutoff must stay a literal on the file read) and ADR 0007 (warehouse
+uploaded with an S3 conditional write).

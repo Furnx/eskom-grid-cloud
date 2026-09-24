@@ -65,13 +65,26 @@ Met overnight 23–24 September: 20 consecutive hourly runs, both areas, no gaps
 
 Goal: the dbt models build in the cloud; the warehouse accumulates history.
 
-- [ ] Container-image Lambda with `dbt-core` + `dbt-duckdb`
-- [ ] DuckDB reads `s3://…/raw/**/*.json` directly (httpfs)
-- [ ] Warehouse file pulled from and pushed back to `s3://…/warehouse/`
-- [ ] Least-privilege role: read `raw/*`, read + write `warehouse/*`, nothing else
-- [ ] ECR repository and image build
+Plan and spike results: [PHASE2_PLAN.md](PHASE2_PLAN.md). Decisions:
+[ADR 0006](adr/0006-transform-reads-only-new-raw-files.md) (only new raw files are read),
+[ADR 0007](adr/0007-single-writer-for-the-warehouse.md) (one writer for the warehouse).
 
-**Milestone:** `fct_grid_events` grows run over run without the laptop.
+**2a — Application** (eskom-grid-observability `v0.3.0`):
+- [ ] Landing model `stg_eskom__raw_payloads`: the only S3 reader, new files only
+- [ ] `fct_pipeline_runs` derived from raw files; Dagster `pipeline_run_log` asset removed
+- [ ] `run_transform()`, a `[transform]` extra, and a `prod` profile for S3
+- [ ] Fixture tests (including one event); release `v0.3.0`
+
+**2b — Platform**:
+- [ ] ECR repository and container image with `dbt-core` + `dbt-duckdb` (arm64)
+- [ ] Transform Lambda: DuckDB reads `s3://…/raw/` directly (httpfs); warehouse pulled from and pushed back to `s3://…/warehouse/` with a conditional write
+- [ ] Least-privilege role: list and read `raw/*`, read + write `warehouse/*`, nothing else
+- [ ] Second schedule at hh:10 (temporary until Phase 3)
+
+**Milestone:** `fct_pipeline_runs` gains a row every hour in the cloud without the
+laptop, and a fixture proves events reach `fct_grid_events`. (Amended 2026-09-24:
+no loadshedding has been scheduled since collection began, so `fct_grid_events`
+alone cannot show growth yet.)
 
 ## Phase 3 — Orchestration & alerting
 
