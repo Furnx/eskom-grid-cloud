@@ -2,7 +2,7 @@
 
 Serverless, zero-cost AWS deployment of the [Eskom Grid Observability](https://github.com/Furnx/eskom-grid-observability) pipeline — infrastructure as code, deployed by CI, running around the clock without a laptop.
 
-> **Status:** Phase 0 complete (account secured, 2026-09-21). Phase 1 in progress. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status:** Phase 1 complete (2026-09-24): raw JSON lands in S3 every hour without the laptop, and a full destroy → rebuild → restore has been proven. Phase 2 (transform) is next. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## The problem
 
@@ -238,6 +238,6 @@ eskom-grid-cloud/
 ├── infra/                    Terraform — one file per concern        (Phase 1)
 ├── functions/                thin Lambda entry points + Dockerfile   (Phase 1–2)
 ├── .github/workflows/        plan on PR, apply on main               (Phase 4)
-└── scripts/                  smoke test                              (Phase 5)
+└── scripts/                  build, purge; smoke test                (Phase 1, 5)
 ```
 WTC-PQ6WCN86

@@ -74,9 +74,9 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 - They are learning cloud engineering from zero and want to understand, not just ship:
   investigate, explain what matters, propose a plan, and wait for approval before
   changing files. Their global CLAUDE.md has the full workflow.
-- **Owed deliverable:** a comprehensive, entertaining, assumes-no-prior-knowledge guide
-  to this project (AWS, Terraform, IAM, Lambda, S3, and why each piece exists), grounded
-  in these actual files rather than generic tutorials. Requested 2026-09-23.
+- **Beginner's guide:** delivered 2026-09-24 as `docs/GUIDE.md`, local only (listed in
+  `.git/info/exclude`, never committed). Grounded in these files and live output;
+  revise it when a phase lands.
 
 ## Where things are
 
@@ -86,14 +86,21 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 
 ## Current phase
 
-Phase 1 complete as of 2026-09-23 and deployed:
-`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.1.0),
+Phase 1 complete as of 2026-09-24 and deployed:
+`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.2.0),
 `eskom-grid-hourly` (EventBridge Scheduler) - all live in af-south-1 and
 writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
-`infra/terraform.tfstate` (git-ignored).
+`infra/terraform.tfstate` (git-ignored). Destroy → rebuild → restore was
+proven on 2026-09-24; Terraform never deletes the raw history (ADR 0005).
 
-Build before planning: `./scripts/build_lambda.ps1`, then `cd infra; terraform plan`.
-`archive_file` is a data source read at plan time, so `build/lambda/` must exist first.
+Build before planning: `./scripts/build_lambda.ps1` (reads `app_version` from
+`infra/variables.tf`), then `cd infra; terraform plan`. `archive_file` is a data
+source read at plan time, so `build/lambda/` must exist first, and a precondition
+refuses a build made from a different version.
+
+Open follow-ups: `scripts/purge_bucket.ps1` should take and verify the backup
+itself (the 2026-09-24 drill skipped the backup step and was rescued by luck);
+Lambda's default async retries apply despite the schedule's retry 0 (Phase 3).
 
 Next: Phase 2 - the transform (dbt) function. It needs changes in the companion
 repo too: `pipeline_run_log` and `fct_pipeline_runs` still assume a local disk

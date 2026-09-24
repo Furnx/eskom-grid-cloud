@@ -17,7 +17,7 @@ Goal: an AWS account that is safe to build in and cannot cost money.
 
 **Milestone:** `aws sts get-caller-identity --profile eskom-admin` succeeds; the budget exists; root MFA is on.
 
-## Phase 1 — Landing zone in the cloud
+## Phase 1 — Landing zone in the cloud ✅ 2026-09-24
 
 Goal: raw JSON lands in S3 every hour with the laptop switched off.
 
@@ -39,12 +39,26 @@ The application repository also carries a test asserting this boundary holds.
 - [x] EventBridge Scheduler rule invoking it hourly
 - [x] All of it deleted again
 
-**1c — In Terraform** (`infra/`):
-- [ ] Provider, bucket, extract Lambda with the real code, least-privilege role, SSM parameter for the API key, hourly schedule
-- [ ] `terraform apply` from the laptop; `terraform destroy` proven to work
-- [ ] README: deploy/destroy instructions
+**1c — In Terraform** (`infra/`) ✅ 2026-09-24:
+- [x] Provider, bucket, extract Lambda with the real code, least-privilege role, SSM parameter for the API key, hourly schedule
+- [x] `terraform apply` from the laptop; `terraform destroy` proven to work
+- [x] README: deploy/destroy instructions
+
+Destroy proven by a full drill on 2026-09-24
+([ADR 0005](adr/0005-raw-history-outlives-infrastructure.md)): purge →
+`terraform destroy` (11 destroyed; only the out-of-band API key remained) →
+`terraform apply` (11 added, then "No changes") → restore. All 49 raw objects
+came back byte-identical, checked by ETag against a listing taken beforehand,
+and the rebuilt stack's first scheduled run landed at 16:00 SAST.
+
+The drill also exposed a gap: the local backup step was skipped and nothing
+stopped the purge. The files were rebuilt exactly — every payload that day was
+identical per area, so two known bodies and the recorded MD5s were enough — but
+that was luck, not design. Follow-up: the purge script takes and verifies the
+backup itself.
 
 **Milestone:** laptop off overnight → `raw/<area_id>/<ts>.json` objects appear in S3 every hour.
+Met overnight 23–24 September: 20 consecutive hourly runs, both areas, no gaps.
 
 ## Phase 2 — Transform in the cloud
 
@@ -66,6 +80,11 @@ Goal: dependency ordering and failure handling, with a human notified.
 - [ ] Scheduler targets the state machine instead of the Lambda
 - [ ] SNS topic + email subscription; the failure branch publishes to it
 - [ ] CloudWatch alarm on failed executions → same topic
+- [ ] Retries owned by the state machine. Today the scheduler invokes the Lambda
+      asynchronously, so Lambda's default of two retries applies despite
+      `maximum_retry_attempts = 0` on the schedule: a failing hour can spend up to
+      6 API requests against a daily buffer of 2. A synchronous invoke from Step
+      Functions removes that layer.
 
 **Milestone:** break the API key on purpose → an email arrives within one cycle; fix it → the next run succeeds.
 
