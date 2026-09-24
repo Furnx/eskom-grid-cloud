@@ -98,9 +98,12 @@ Build before planning: `./scripts/build_lambda.ps1` (reads `app_version` from
 source read at plan time, so `build/lambda/` must exist first, and a precondition
 refuses a build made from a different version.
 
-Open follow-ups: `scripts/purge_bucket.ps1` should take and verify the backup
-itself (the 2026-09-24 drill skipped the backup step and was rescued by luck);
-Lambda's default async retries apply despite the schedule's retry 0 (Phase 3).
+Full teardown is `scripts/purge_bucket.ps1 -BackupPath <new folder>` (backs up,
+verifies every file by MD5, then asks for the bucket name), then `terraform
+destroy`; the README has the rebuild-and-restore steps.
+
+Open follow-up: Lambda's default async retries apply despite the schedule's
+retry 0 (Phase 3).
 
 Next: Phase 2 - the transform (dbt) function. It needs changes in the companion
 repo too: `pipeline_run_log` and `fct_pipeline_runs` still assume a local disk

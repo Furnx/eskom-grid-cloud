@@ -178,19 +178,18 @@ group, then stops with `BucketNotEmpty`. The history is intact, but the bucket
 has lost its public access block, lifecycle rule and versioning;
 `terraform apply` restores them along with everything else.
 
-**A full teardown, history included**, is three deliberate steps. Start just
-after a scheduled run (around hh:02), so that no new object lands between
-steps 2 and 3:
+**A full teardown, history included**, is two deliberate steps. Start just
+after a scheduled run (around hh:02), so that no new object lands between them:
 
 ```powershell
-# 1. Back up the history, outside the repository.
-aws s3 sync s3://eskom-grid-<account-id>/raw/ "$HOME\eskom-grid-backup\<date>\raw" --profile eskom-admin
+# 1. Back up, verify, then delete every object version. The script downloads
+#    the bucket into -BackupPath (a new folder, outside the repository), checks
+#    every file against S3's MD5 fingerprint, and only then asks for the bucket
+#    name. The bucket is versioned, so `aws s3 rm` would only add delete markers.
+#    Add -DryRun to do everything except the deletion.
+./scripts/purge_bucket.ps1 -Bucket eskom-grid-<account-id> -BackupPath "$HOME\eskom-grid-backup\<date>"
 
-# 2. Delete every object version. The bucket is versioned, so `aws s3 rm`
-#    would only add delete markers. Add -DryRun to see what would go.
-./scripts/purge_bucket.ps1 -Bucket eskom-grid-<account-id>
-
-# 3. Remove the infrastructure.
+# 2. Remove the infrastructure.
 cd infra
 terraform destroy
 ```
@@ -204,13 +203,22 @@ outside Terraform) and your local backup.
 ./scripts/build_lambda.ps1
 cd infra
 terraform apply
-aws s3 sync "$HOME\eskom-grid-backup\<date>\raw" s3://eskom-grid-<account-id>/raw/ --profile eskom-admin
+cd ..
+
+$backup = "$HOME\eskom-grid-backup\<date>"
+aws s3 sync "$backup\objects" s3://eskom-grid-<account-id>/ --profile eskom-admin
+
+# Prove the restore is byte-identical: no output means every object matches.
+aws s3api list-objects-v2 --bucket eskom-grid-<account-id> --query "Contents[].[Key, ETag, Size]" `
+  --output text --profile eskom-admin | Sort-Object | Set-Content "$backup\restored.tsv"
+Compare-Object (Get-Content "$backup\fingerprints.tsv") (Get-Content "$backup\restored.tsv")
 ```
 
 If `apply` fails on the bucket with `OperationAborted`, S3 has not yet released
 the name of the bucket that was just deleted: wait a few minutes and run
 `terraform apply` again. Restored objects keep their keys, and the run
-timestamp is part of the key, so the history continues where it stopped.
+timestamp is part of the key, so the history continues where it stopped. A
+scheduled run that lands before the comparison shows up as extra `=>` lines.
 
 ### API quota
 

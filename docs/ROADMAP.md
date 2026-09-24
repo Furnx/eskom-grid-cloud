@@ -54,8 +54,9 @@ and the rebuilt stack's first scheduled run landed at 16:00 SAST.
 The drill also exposed a gap: the local backup step was skipped and nothing
 stopped the purge. The files were rebuilt exactly — every payload that day was
 identical per area, so two known bodies and the recorded MD5s were enough — but
-that was luck, not design. Follow-up: the purge script takes and verifies the
-backup itself.
+that was luck, not design. Fixed the same day: the purge script now takes the
+backup itself and checks every file against S3's MD5 fingerprint before it will
+ask for the bucket name, so the backup can no longer be skipped by accident.
 
 **Milestone:** laptop off overnight → `raw/<area_id>/<ts>.json` objects appear in S3 every hour.
 Met overnight 23–24 September: 20 consecutive hourly runs, both areas, no gaps.
