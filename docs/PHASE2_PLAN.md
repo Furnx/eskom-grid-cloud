@@ -289,7 +289,8 @@ quota; idempotent models; conditional upload).
 30 days; `warehouse/` only 3 (rewritten hourly, and rebuildable from `raw/`).
 
 **B9. Docs**: README deploy order (first time: `terraform apply
--target=aws_ecr_repository.transform`, then build and push, then a full apply),
+"-target=aws_ecr_repository.transform"` - quoted, or PowerShell splits it at the
+dot - then build and push, then a full apply),
 cost table (ECR storage; S3 requests), diagram and status; `outputs.tf`; ROADMAP.
 Once the milestone is met, revise the local `docs/GUIDE.md` (never committed) with
 a Phase 2 part: WAL and checkpoints, S3 conditional writes, image tags vs
