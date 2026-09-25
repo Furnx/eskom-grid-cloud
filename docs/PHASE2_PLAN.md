@@ -1,12 +1,15 @@
 # Phase 2 plan — transform in the cloud
 
 Written 2026-09-24, after an investigation and a spike against the live bucket.
-Status: **Part A done** — released as `v0.3.0` (commit `2f70d6b`, 2026-09-25).
-Order of work step 2 done: the extract function was redeployed from `v0.3.0`
-(2026-09-25 14:30 SAST) and its next hourly run landed both areas cleanly.
-**Part B next.** Part A matched this plan; its session confirmed two points for
-Part B: `pipeline_run_log` no longer exists anywhere (neither asset nor table),
-and `dbt deps` at image build time is required, not optional (see B2).
+Status: **Part A done** — released as `v0.3.0` (commit `2f70d6b`, 2026-09-25),
+patched as `v0.3.1` (commit `bf9c3a2`, same day) after the image tests in Part B
+exposed two faults (see "Part B, chunk 1 results"). Order of work step 2 done:
+the extract function was redeployed from `v0.3.0` (2026-09-25 14:30 SAST), then
+from `v0.3.1` (19:07 SAST). Part A's session confirmed two points for Part B:
+`pipeline_run_log` no longer exists anywhere (neither asset nor table), and
+`dbt deps` at image build time is required, not optional (see B2).
+**Part B:** chunk 1 (image, handler, build script, local tests) done 2026-09-25;
+**chunk 2 next** (ECR, transform Lambda, role, schedule, lifecycle split).
 
 Phase 2 spans both repositories. **Part A** is done in a Claude Code session
 opened in `eskom-grid-observability` and ends with release tag `v0.3.0`.
@@ -177,25 +180,78 @@ file, so it must be correct):
 
 ## Part B — `eskom-grid-cloud`
 
+### Chunk 1 results (2026-09-25)
+
+Built: `functions/transform/Dockerfile`, `functions/transform/handler.py`,
+`scripts/build_transform_image.ps1` (build only; its smoke tests run offline,
+read-only and as a non-root user, and compile through the image's own profile).
+Image `v0.3.1-a70261b`: 265 MB compressed (what ECR stores and Lambda pulls),
+about 800 MB unpacked.
+
+Testing the image the way Lambda runs it found two faults in app `v0.3.0` that a
+laptop cannot show, both fixed in `v0.3.1` with regression tests:
+
+- **Extensions not found.** The prod profile set `extension_directory` under
+  `settings`, which dbt-duckdb applies only after it has installed the
+  extensions; DuckDB fell back to `~/.duckdb`, read-only in Lambda. Now under
+  `config_options`.
+- **Database left open.** After `run_transform()` returned, the tables were still
+  in the `.wal` beside a 12 KB file, and a warm process reused its handle to a
+  file the handler had since replaced. The handler would have uploaded an empty
+  warehouse every hour. `run_transform()` now closes dbt-duckdb's connection.
+
+Then, in the Lambda runtime emulator against the live bucket (temporary
+credentials; the user ran the writes):
+
+| Run | Result |
+|---|---|
+| First (no warehouse) | Created `warehouse/eskom_data.duckdb` with `IfNoneMatch='*'`: 105 raw files, 53 runs, 40/40 nodes. Landing model 14.7 s |
+| Second, same warm container | `IfMatch` upload; compiled cutoff `>= '20260925_170016'` (a literal); landing model 2.2 s |
+| Conflict check | Wrong ETag and `IfNoneMatch='*'` over the existing object: both `412 PreconditionFailed` → `WarehouseConflictError`; object and version count unchanged |
+
+Carried into chunk 2:
+
+- **B6, first-run detection:** S3 answers a GetObject for a missing key with
+  404 only if the caller may `s3:ListBucket`; otherwise 403. With `ListBucket`
+  limited by `s3:prefix` to `raw/*`, a missing warehouse (after a purge and
+  rebuild) would surface as AccessDenied. Allow for it, and exercise the
+  missing-object path once with the real role.
+- **B5, memory:** the emulator does not measure memory (it reports its 3008 MB
+  default). Start at 1024 MB and tune from real REPORT lines. Emulated arm64
+  timings (slower than Graviton): init 9.5 s, first run 101 s, warm run 43 s.
+- **B5, environment:** `DUCKDB_EXTENSION_DIRECTORY` is set in the image, where
+  the extensions are installed; the function needs only `ESKOM_RAW_GLOB` and
+  `ESKOM_WAREHOUSE_URI`.
+- **B8, sizes:** the warehouse file alternates between about 1.8 and 3.6 MB
+  from one run to the next (DuckDB reuses freed blocks; tested over 8 runs), so
+  each hourly version is a few MB. Under the current 30-day rule that is ~2 GB
+  of non-current versions; the split matters.
+- **B1/B9, ECR:** ~265 MB per image, so "keep the last 3" is ~0.8 GB stored.
+- **B4, push:** tags are `<app_version>-<commit>` and ECR tags will be
+  immutable, so pushing a second build of the same commit must be refused or
+  skipped, not overwrite.
+
 **B1. `infra/registry.tf`** (new): ECR repository `eskom-grid-transform`;
 immutable tags; scan on push; lifecycle policy keeping the last 3 images;
 `force_delete = true` (images are rebuildable, unlike raw history — ADR 0005).
 
-**B2. `functions/transform/Dockerfile`** (new): base
-`public.ecr.aws/lambda/python:3.13`, built for `linux/arm64`. Download the app's
-source archive for `APP_VERSION` from GitHub; `pip install ".[transform]"` and a
-pinned boto3 new enough for `put_object(IfMatch=…)`; copy `dbt_project/` into the
+**B2. `functions/transform/Dockerfile`** (new; done in chunk 1): base
+`public.ecr.aws/lambda/python:3.13` pinned by digest, built for `linux/arm64`.
+BuildKit clones the app at `APP_VERSION` (`ADD <repo>.git#<tag>`; the image has
+no git or tar); `pip install ".[transform]"`. boto3 is the base image's own
+(1.42.97, which supports `put_object(IfMatch=…)`), pinned by the digest rather
+than installed a second time; copy `dbt_project/` into the
 image with `profiles.yml` made from `profiles.yml.example`; run `dbt deps` at build
 time — **required**: `fct_pipeline_runs` uses `dbt_utils.generate_surrogate_key`, so
 without `dbt_packages/` in the image every build fails; install the `httpfs` and `aws` DuckDB extensions at build time into
 `/opt/duckdb_extensions`; add `handler.py`.
 
-**B3. `functions/transform/handler.py`** (new, thin): download the warehouse to
+**B3. `functions/transform/handler.py`** (new, thin; done in chunk 1): download the warehouse to
 `/tmp` (if absent: first run, full build) and keep its ETag; call `run_transform`
 with `/tmp` paths; upload with `IfMatch` (or `IfNoneMatch='*'` on first run);
 let exceptions propagate. Start from a clean `/tmp` — warm environments keep it.
 
-**B4. `scripts/build_transform_image.ps1`** (new): read `app_version` from
+**B4. `scripts/build_transform_image.ps1`** (new; build done in chunk 1, push in chunk 2): read `app_version` from
 `infra/variables.tf` (as `build_lambda.ps1` does); `docker buildx build
 --platform linux/arm64 --provenance=false` (Lambda rejects the image index that
 provenance attestations create); tag `<app_version>-<platform commit>`; log in to

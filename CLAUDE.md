@@ -87,7 +87,7 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 ## Current phase
 
 Phase 1 complete as of 2026-09-24 and deployed:
-`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.3.0),
+`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.3.1),
 `eskom-grid-hourly` (EventBridge Scheduler) - all live in af-south-1 and
 writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
 `infra/terraform.tfstate` (git-ignored). Destroy → rebuild → restore was
@@ -105,8 +105,13 @@ destroy`; the README has the rebuild-and-restore steps.
 Open follow-up: Lambda's default async retries apply despite the schedule's
 retry 0 (Phase 3).
 
-Next: Phase 2 Part B - the transform (dbt) function, here. Read
-`docs/PHASE2_PLAN.md` first. Part A is done (app `v0.3.0`, 2026-09-25) and the
-extract function already runs it. Key decisions: ADR 0006 (only new raw files
-are read - the cutoff must stay a literal on the file read) and ADR 0007
-(warehouse uploaded with an S3 conditional write).
+Now: Phase 2 Part B - the transform (dbt) function, here. Read
+`docs/PHASE2_PLAN.md` first (its "Chunk 1 results" feed chunk 2). Part A is done
+(app `v0.3.1`, 2026-09-25) and the extract function runs it. Chunk 1 is done:
+`functions/transform/` (Dockerfile, handler) and
+`scripts/build_transform_image.ps1` build and test the image locally (needs
+Docker Desktop; ~7-13 min under arm64 emulation). The live bucket already holds
+`warehouse/eskom_data.duckdb`, written by the local emulator tests. Next: chunk
+2 (ECR, transform Lambda, role, :10 schedule, lifecycle split). Key decisions:
+ADR 0006 (only new raw files are read - the cutoff must stay a literal on the
+file read) and ADR 0007 (warehouse uploaded with an S3 conditional write).

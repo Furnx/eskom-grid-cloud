@@ -79,6 +79,12 @@ Verified before release against the 55 real files: 40/40 dbt nodes pass; a
 second build re-read 2 files instead of 55; the compiled SQL carries the cutoff
 as a literal on the file read; importing `eskom_grid.transform` does not import dbt.
 
+Patched in [v0.3.1](https://github.com/Furnx/eskom-grid-observability/releases/tag/v0.3.1)
+the same day: testing the Lambda image offline, read-only and warm exposed two
+faults a laptop cannot show — DuckDB extensions looked for in a read-only home
+directory, and the database left open (tables still in the `.wal`) when
+`run_transform()` returned. Both fixed with regression tests.
+
 **2b — Platform**:
 - [ ] ECR repository and container image with `dbt-core` + `dbt-duckdb` (arm64)
 - [ ] Transform Lambda: DuckDB reads `s3://…/raw/` directly (httpfs); warehouse pulled from and pushed back to `s3://…/warehouse/` with a conditional write
