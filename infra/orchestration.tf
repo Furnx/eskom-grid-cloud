@@ -30,3 +30,33 @@ resource "aws_scheduler_schedule" "hourly" {
     }
   }
 }
+
+# The transform, ten minutes after extract. Temporary: a fixed offset assumes
+# extract has finished by then, which is true (it takes seconds) but not
+# enforced. Phase 3 replaces both schedules with one state machine that runs
+# transform only after extract succeeds.
+resource "aws_scheduler_schedule" "transform_hourly" {
+  name        = "${local.transform_function_name}-hourly"
+  description = "Invokes the transform Lambda at ten past every hour, after extract."
+
+  flexible_time_window {
+    mode = "OFF"
+  }
+
+  schedule_expression          = var.transform_schedule_expression
+  schedule_expression_timezone = var.schedule_timezone
+
+  target {
+    arn      = aws_lambda_function.transform.arn
+    role_arn = aws_iam_role.scheduler.arn
+
+    # Set explicitly: left out, EventBridge Scheduler's default is 185 retries
+    # over 24 hours. These retries cover failing to *start* the function (for
+    # example throttling), not errors inside a run; Lambda's own two retries of
+    # a failed run still apply (see the Phase 3 roadmap). The next hour's run
+    # reads whatever this one missed, so no retry is needed here.
+    retry_policy {
+      maximum_retry_attempts = 0
+    }
+  }
+}

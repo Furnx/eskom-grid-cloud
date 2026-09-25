@@ -34,20 +34,39 @@ resource "aws_s3_bucket_public_access_block" "raw" {
 }
 
 # Versioning means deleted or overwritten objects linger and accumulate storage.
-# Current versions are kept indefinitely — they are the history the project
-# exists to collect — but superseded ones expire.
+# Current versions are kept indefinitely, but superseded ones expire, on two
+# clocks because the two prefixes behave differently:
+#   raw/        the history the project exists to collect. Each object is
+#               written once, so old versions are rare; kept a month.
+#   warehouse/  one file, replaced every hour (a few MB each time) and
+#               rebuildable from raw/; a month of old versions would be ~2 GB.
+# Nothing else is stored in this bucket.
 resource "aws_s3_bucket_lifecycle_configuration" "raw" {
   bucket = aws_s3_bucket.raw.id
 
   rule {
-    id     = "expire-noncurrent-versions"
+    id     = "expire-noncurrent-raw"
     status = "Enabled"
 
-    # An empty filter applies the rule to every object in the bucket.
-    filter {}
+    filter {
+      prefix = "raw/"
+    }
 
     noncurrent_version_expiration {
       noncurrent_days = var.noncurrent_version_expiration_days
+    }
+  }
+
+  rule {
+    id     = "expire-noncurrent-warehouse"
+    status = "Enabled"
+
+    filter {
+      prefix = "warehouse/"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.warehouse_noncurrent_version_expiration_days
     }
   }
 

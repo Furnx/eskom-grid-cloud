@@ -20,6 +20,26 @@ output "schedule_name" {
   value       = aws_scheduler_schedule.hourly.name
 }
 
+output "ecr_repository_url" {
+  description = "ECR repository the transform image is pushed to."
+  value       = aws_ecr_repository.transform.repository_url
+}
+
+output "transform_function_name" {
+  description = "Transform Lambda function name."
+  value       = aws_lambda_function.transform.function_name
+}
+
+output "transform_log_group" {
+  description = "CloudWatch log group for the transform function."
+  value       = aws_cloudwatch_log_group.transform.name
+}
+
+output "transform_schedule_name" {
+  description = "EventBridge schedule driving the transform function."
+  value       = aws_scheduler_schedule.transform_hourly.name
+}
+
 output "verify_commands" {
   description = "Copy-paste checks: invoke once, then list what landed."
   value       = <<-EOT
@@ -31,5 +51,12 @@ output "verify_commands" {
 
     # Recent logs:
     aws logs tail ${aws_cloudwatch_log_group.extract.name} --since 15m --profile ${var.aws_profile} --region ${var.aws_region}
+
+    # Run the transform once (reads the new raw files, replaces the warehouse):
+    aws lambda invoke --function-name ${aws_lambda_function.transform.function_name} --profile ${var.aws_profile} --region ${var.aws_region} response.json; cat response.json
+
+    # The warehouse, and the transform's logs:
+    aws s3api head-object --bucket ${aws_s3_bucket.raw.bucket} --key warehouse/eskom_data.duckdb --profile ${var.aws_profile} --region ${var.aws_region}
+    aws logs tail ${aws_cloudwatch_log_group.transform.name} --since 15m --profile ${var.aws_profile} --region ${var.aws_region}
   EOT
 }

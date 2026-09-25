@@ -96,7 +96,61 @@ variable "log_retention_days" {
 }
 
 variable "noncurrent_version_expiration_days" {
-  description = "How long superseded S3 object versions are kept before deletion."
+  description = "How long superseded versions of raw/ objects are kept before deletion."
   type        = number
   default     = 30
+}
+
+# ── Transform (Phase 2) ──────────────────────────────────────────────────────
+# The lambda_* variables above belong to the extract function; the transform's
+# workload is different enough to need its own.
+
+variable "transform_memory_mb" {
+  description = <<-EOT
+    Memory for the transform Lambda; CPU scales with it. A starting point only:
+    the local emulator cannot measure memory, so tune this from "Max Memory
+    Used" in the function's REPORT log lines.
+  EOT
+  type        = number
+  default     = 1024
+}
+
+variable "transform_timeout_seconds" {
+  description = <<-EOT
+    Under arm64 emulation on a laptop, a warm run took 43 s and a full first
+    run 101 s; Graviton is faster. Generous, so that a slow S3 day still
+    finishes and a stuck run fails clearly.
+  EOT
+  type        = number
+  default     = 300
+}
+
+variable "transform_schedule_expression" {
+  description = <<-EOT
+    Ten past the hour: extract fires on the hour and finishes in seconds. A
+    fixed offset is a stopgap; Phase 3 runs the two in order in Step
+    Functions. Same six-field format as schedule_expression.
+  EOT
+  type        = string
+  default     = "cron(10 * * * ? *)"
+}
+
+variable "warehouse_noncurrent_version_expiration_days" {
+  description = <<-EOT
+    How long superseded versions of the warehouse file are kept. It is replaced
+    every hour (a few MB each time) and can be rebuilt from raw/, so a short
+    window is enough.
+  EOT
+  type        = number
+  default     = 3
+}
+
+variable "ecr_images_to_keep" {
+  description = <<-EOT
+    Transform images kept in ECR (about 265 MB each). The rule counts pushes,
+    not deployments, and a function whose image is deleted fails: always
+    deploy after pushing, and never push more than this many without deploying.
+  EOT
+  type        = number
+  default     = 3
 }

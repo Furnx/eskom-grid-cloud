@@ -1,8 +1,8 @@
 # Identities for the workload.
 #
-# Two separate roles, because in AWS every component authenticates as itself:
-#   * the Lambda's execution role  — what the function's code may do
-#   * the scheduler's role         — permission to invoke that one function
+# One role per component, because in AWS every component authenticates as itself:
+#   * each Lambda's execution role — what that function's code may do
+#   * the scheduler's role         — permission to invoke those two functions
 #
 # Every resource below is addressed by reference (aws_s3_bucket.raw.arn) rather
 # than a typed-out ARN, so a name can never drift out of sync with a policy.
@@ -88,6 +88,79 @@ resource "aws_iam_role_policy" "extract" {
   policy = data.aws_iam_policy_document.extract.json
 }
 
+# ── Transform execution role ──────────────────────────────────────────────────
+
+data "aws_iam_policy_document" "transform_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "transform" {
+  name               = local.transform_function_name
+  description        = "Execution role for the transform Lambda: list and read raw/, read and replace the warehouse, write its own logs."
+  assume_role_policy = data.aws_iam_policy_document.transform_assume_role.json
+}
+
+data "aws_iam_policy_document" "transform" {
+  # DuckDB expands raw/**/*.json by listing the raw/ prefix. warehouse/ is
+  # listable for a less obvious reason: S3 reports a missing object as "not
+  # found" only to a caller that may list that key's prefix, and as "access
+  # denied" to anyone else. The handler recognises a first run (no warehouse
+  # yet) by "not found". Tested 2026-09-25; see docs/PHASE2_PLAN.md.
+  statement {
+    sid       = "ListRawAndWarehousePrefixesOnly"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.raw.arn]
+
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["raw/*", "warehouse/*"]
+    }
+  }
+
+  statement {
+    sid     = "ReadRawAndWarehouse"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.raw.arn}/raw/*",
+      "${aws_s3_bucket.raw.arn}/warehouse/*",
+    ]
+  }
+
+  # Writes go to the warehouse only, so the transform can never alter the raw
+  # history it reads. The upload's If-Match / If-None-Match conditions need no
+  # permission of their own.
+  statement {
+    sid       = "ReplaceWarehouseOnly"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.raw.arn}/warehouse/*"]
+  }
+
+  statement {
+    sid       = "WriteOwnLogsOnly"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.transform.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "transform" {
+  name   = local.transform_function_name
+  role   = aws_iam_role.transform.id
+  policy = data.aws_iam_policy_document.transform.json
+}
+
 # ── EventBridge Scheduler role ────────────────────────────────────────────────
 
 data "aws_iam_policy_document" "scheduler_assume_role" {
@@ -104,16 +177,19 @@ data "aws_iam_policy_document" "scheduler_assume_role" {
 
 resource "aws_iam_role" "scheduler" {
   name               = "${var.project_name}-scheduler"
-  description        = "Lets EventBridge Scheduler invoke the extract Lambda, and nothing else."
+  description        = "Lets EventBridge Scheduler invoke the project's two Lambdas, and nothing else."
   assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role.json
 }
 
 data "aws_iam_policy_document" "scheduler" {
   statement {
-    sid       = "InvokeExtractFunctionOnly"
-    effect    = "Allow"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.extract.arn]
+    sid     = "InvokeProjectFunctionsOnly"
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction"]
+    resources = [
+      aws_lambda_function.extract.arn,
+      aws_lambda_function.transform.arn,
+    ]
   }
 }
 
