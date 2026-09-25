@@ -212,10 +212,20 @@ credentials; the user ran the writes):
 Carried into chunk 2:
 
 - **B6, first-run detection:** S3 answers a GetObject for a missing key with
-  404 only if the caller may `s3:ListBucket`; otherwise 403. With `ListBucket`
-  limited by `s3:prefix` to `raw/*`, a missing warehouse (after a purge and
-  rebuild) would surface as AccessDenied. Allow for it, and exercise the
-  missing-object path once with the real role.
+  404 only if the caller may `s3:ListBucket` *for that key's prefix*;
+  otherwise 403. Tested 2026-09-25 with `sts get-federation-token` session
+  policies (reads of a nonexistent key only): `s3:prefix` limited to `raw/*`
+  gives AccessDenied for a missing `warehouse/` key; `["raw/*", "warehouse/*"]`
+  gives NoSuchKey, as does an unconditioned `ListBucket`. So the condition must
+  name both prefixes.
+- **B1, pull permission:** Lambda needs `ecr:BatchGetImage` and
+  `ecr:GetDownloadUrlForLayer`, granted by the execution role or the repository
+  policy. If neither does, Lambda adds a repository policy itself, outside
+  Terraform (AWS docs, "Create a Lambda function using a container image").
+  Declare it, and make the function depend on it.
+- **B1, lifecycle:** a function whose image is deleted from ECR enters the
+  `Failed` state. "Keep the last N" counts pushes, not deployments, so it must
+  never be able to expire the deployed image.
 - **B5, memory:** the emulator does not measure memory (it reports its 3008 MB
   default). Start at 1024 MB and tune from real REPORT lines. Emulated arm64
   timings (slower than Graviton): init 9.5 s, first run 101 s, warm run 43 s.
@@ -226,7 +236,9 @@ Carried into chunk 2:
   from one run to the next (DuckDB reuses freed blocks; tested over 8 runs), so
   each hourly version is a few MB. Under the current 30-day rule that is ~2 GB
   of non-current versions; the split matters.
-- **B1/B9, ECR:** ~265 MB per image, so "keep the last 3" is ~0.8 GB stored.
+- **B1/B9, ECR:** ~265 MB per image, so "keep the last 3" is ~0.8 GB stored;
+  ECR storage in af-south-1 is $0.10 per GB-month (AWS Pricing API), so about
+  $0.08 a month against the credits.
 - **B4, push:** tags are `<app_version>-<commit>` and ECR tags will be
   immutable, so pushing a second build of the same commit must be refused or
   skipped, not overwrite.
