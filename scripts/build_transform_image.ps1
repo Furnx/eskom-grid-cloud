@@ -74,26 +74,46 @@ docker buildx build `
     $FunctionDir
 if ($LASTEXITCODE -ne 0) { throw "docker build failed." }
 
-# Smoke test inside the image, with no network: what the handler imports is
-# present, Dagster is not, the runtime's boto3 supports the conditional write,
-# and both DuckDB extensions load from the image alone. The script goes in on
-# stdin: Windows PowerShell mangles quotes inside arguments to native programs.
+# Smoke tests run under the restrictions Lambda imposes: no network, a
+# read-only filesystem except /tmp, and a user that is neither root nor the
+# owner of the files (the uid itself is arbitrary).
+$lambdaLike = @("--platform", $Platform, "--network", "none",
+                "--read-only", "--tmpfs", "/tmp", "--user", "993:990")
+
+# 1. What the handler imports is present, Dagster is not, and the runtime's
+#    boto3 supports the conditional write. The script goes in on stdin: Windows
+#    PowerShell mangles quotes inside arguments to native programs.
 $check = @'
-import importlib.util, os, boto3, duckdb
+import importlib.util, boto3
 import eskom_grid.transform, dbt.cli.main, handler
 assert importlib.util.find_spec('dagster') is None, 'Dagster found in the image'
 s3 = boto3.client('s3', region_name='af-south-1')
 params = s3.meta.service_model.operation_model('PutObject').input_shape.members
 assert {'IfMatch', 'IfNoneMatch'} <= set(params), 'boto3 lacks conditional writes'
-con = duckdb.connect(config={'extension_directory': os.environ['DUCKDB_EXTENSION_DIRECTORY'],
-                             'autoinstall_known_extensions': False})
-con.execute('LOAD httpfs; LOAD aws')
-print(f'boto3 {boto3.__version__}, duckdb {duckdb.__version__}: OK')
+print(f'imports and boto3 {boto3.__version__}: OK')
 '@
-$check | docker run --rm -i --network none --entrypoint python $image -
-if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image." }
+$check | docker run --rm -i @lambdaLike --entrypoint python $image -
+if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (imports)." }
+
+# 2. dbt compiles the project through the image's own prod profile: the
+#    profile parses, DuckDB opens a database in /tmp and loads both extensions
+#    from the image, and dbt writes nothing outside /tmp. Loading the extensions
+#    directly would not do: a profile that points DuckDB elsewhere passed that.
+#    The credentials are placeholders; DuckDB's S3 secret refuses to be
+#    created without some, and with no network nothing can use them.
+docker run --rm @lambdaLike `
+    -e "ESKOM_DUCKDB_PATH=/tmp/smoke/eskom_data.duckdb" `
+    -e "ESKOM_RAW_GLOB=s3://smoke-test/raw/**/*.json" `
+    -e "AWS_REGION=af-south-1" `
+    -e "AWS_ACCESS_KEY_ID=smoke-test-placeholder" `
+    -e "AWS_SECRET_ACCESS_KEY=smoke-test-placeholder" `
+    --entrypoint dbt $image compile --quiet `
+    --project-dir /var/task/dbt_project --profiles-dir /var/task/dbt_project `
+    --target prod --target-path /tmp/smoke/target --log-path /tmp/smoke/logs
+if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (dbt compile, prod profile)." }
+Write-Host "dbt compile through the prod profile, offline and read-only: OK"
 
 $sizeMb = [math]::Round((docker image inspect $image --format "{{.Size}}") / 1MB)
 
 Write-Host ""
-Write-Host "Build complete: $image ($sizeMb MB)." -ForegroundColor Green
+Write-Host "Build complete: $image ($sizeMb MB compressed)." -ForegroundColor Green
