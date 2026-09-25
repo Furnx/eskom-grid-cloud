@@ -1,11 +1,14 @@
 <#
 .SYNOPSIS
-    Builds the transform Lambda's container image locally.
+    Builds the transform Lambda's container image, and with -Push publishes it
+    to ECR for Terraform to deploy.
 
 .DESCRIPTION
-    Builds functions/transform/Dockerfile for linux/arm64 and loads the result
-    into the local Docker image store. It does not push: publishing to ECR is a
-    separate step.
+    Builds functions/transform/Dockerfile for linux/arm64, loads the result
+    into the local Docker image store and smoke-tests it. With -Push it also
+    uploads the image to the ECR repository (infra/registry.tf) and records
+    the pushed tag in build/transform_image_tag.txt, which infra/compute.tf
+    reads to decide what to deploy.
 
     Needs Docker Desktop running. The build runs under arm64 emulation on an
     x86 laptop, so the first build takes a few minutes; later builds reuse
@@ -24,18 +27,28 @@
     Git tag of eskom-grid-observability to build from. Defaults to the
     app_version default in infra/variables.tf, the single source of truth.
 
+.PARAMETER Push
+    After a successful build and smoke test, push the image to ECR. Refused
+    for a -dirty build: ECR tags are immutable, so it would stay there forever
+    under a name that does not identify its contents.
+
 .EXAMPLE
-    ./scripts/build_transform_image.ps1
+    ./scripts/build_transform_image.ps1          # build and test only
+    ./scripts/build_transform_image.ps1 -Push    # then publish; next: terraform plan
 #>
 
 param(
-    [string]$AppVersion
+    [string]$AppVersion,
+    [switch]$Push,
+    [string]$AwsProfile = "eskom-admin",
+    [string]$Region = "af-south-1"
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $FunctionDir = Join-Path $RepoRoot "functions\transform"
+$TagFile = Join-Path $RepoRoot "build\transform_image_tag.txt"
 $AppRepo = "https://github.com/Furnx/eskom-grid-observability.git"
 $ImageName = "eskom-grid-transform"
 $Platform = "linux/arm64"
@@ -58,6 +71,15 @@ if ($LASTEXITCODE -ne 0) { throw "Could not read this repository's commit." }
 $dirty = git -C $RepoRoot status --porcelain -- functions/transform
 $tag = "$AppVersion-$commit" + $(if ($dirty) { "-dirty" } else { "" })
 $image = "${ImageName}:$tag"
+
+if ($Push) {
+    # Checked before the build, not after it: no point spending minutes first.
+    if ($dirty) { throw "functions/transform has uncommitted changes; commit them before pushing." }
+
+    # From here until a push is confirmed, there is no record for Terraform to
+    # deploy, so a failed run cannot leave an older tag looking current.
+    if (Test-Path $TagFile) { Remove-Item -Force $TagFile }
+}
 
 Write-Host "Building transform image" -ForegroundColor Cyan
 Write-Host "  app version : $AppVersion"
@@ -117,3 +139,68 @@ $sizeMb = [math]::Round((docker image inspect $image --format "{{.Size}}") / 1MB
 
 Write-Host ""
 Write-Host "Build complete: $image ($sizeMb MB compressed)." -ForegroundColor Green
+
+if (-not $Push) {
+    Write-Host "Not pushed. Add -Push to publish it to ECR."
+    return
+}
+
+# ── Push to ECR ──────────────────────────────────────────────────────────────
+# Existence checks use queries that come back empty rather than failing, so no
+# error output needs suppressing (Windows PowerShell can turn it into an
+# exception).
+
+Write-Host ""
+Write-Host "Pushing to ECR ($Region)" -ForegroundColor Cyan
+
+$repositoryUri = aws ecr describe-repositories --profile $AwsProfile --region $Region `
+    --query "repositories[?repositoryName=='$ImageName'].repositoryUri" --output text
+if ($LASTEXITCODE -ne 0) { throw "Could not list ECR repositories." }
+if (-not $repositoryUri) {
+    throw "ECR repository $ImageName does not exist. First deployment: cd infra; terraform apply `"-target=aws_ecr_repository.transform`""
+}
+$registry = $repositoryUri.Split("/")[0]
+$remote = "${repositoryUri}:$tag"
+
+$existing = aws ecr list-images --repository-name $ImageName --profile $AwsProfile --region $Region `
+    --query "imageIds[?imageTag=='$tag'].imageDigest" --output text
+if ($LASTEXITCODE -ne 0) { throw "Could not list images in $ImageName." }
+
+if ($existing) {
+    # Tags are immutable, so a second push of this tag would be rejected. The
+    # image already there was built from the same recipe.
+    Write-Host "  $tag is already in ECR; not pushed again."
+} else {
+    # The password travels through the pipe from one program to the other and
+    # is never shown. Docker keeps it in the Windows credential store for the
+    # token's lifetime (12 hours).
+    aws ecr get-login-password --profile $AwsProfile --region $Region |
+        docker login --username AWS --password-stdin $registry
+    if ($LASTEXITCODE -ne 0) { throw "docker login to $registry failed." }
+
+    docker tag $image $remote
+    docker push $remote
+    if ($LASTEXITCODE -ne 0) { throw "docker push of $remote failed." }
+}
+
+# Lambda accepts a single image manifest, not an index listing several (which
+# is what a build with provenance attestations, or for several platforms,
+# produces). Checked in ECR itself, on what Lambda will actually pull.
+$detail = aws ecr describe-images --repository-name $ImageName --image-ids "imageTag=$tag" `
+    --profile $AwsProfile --region $Region `
+    --query "imageDetails[0].[imageDigest, imageManifestMediaType]" --output text
+if ($LASTEXITCODE -ne 0 -or -not $detail) { throw "$tag was not found in ECR after the push." }
+$digest, $mediaType = $detail -split "\s+"
+if ($mediaType -match "index|manifest\.list") {
+    throw "$tag was pushed as an image index ($mediaType); Lambda will not run it."
+}
+
+# Only now is there something for Terraform to deploy.
+New-Item -ItemType Directory -Force -Path (Split-Path $TagFile) | Out-Null
+Set-Content -Path $TagFile -Value $tag -NoNewline
+
+Write-Host ""
+Write-Host "In ECR: $remote" -ForegroundColor Green
+Write-Host "  digest     : $digest"
+Write-Host "  media type : $mediaType"
+Write-Host "Recorded in build/transform_image_tag.txt. Next: cd infra; terraform plan"
