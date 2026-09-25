@@ -27,7 +27,7 @@ variable "app_version" {
     version. Never point this at a branch.
   EOT
   type        = string
-  default     = "v0.2.0"
+  default     = "v0.3.0"
 }
 
 variable "api_key_parameter_name" {
