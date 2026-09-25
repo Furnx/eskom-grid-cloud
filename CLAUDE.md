@@ -87,7 +87,7 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 ## Current phase
 
 Phase 1 complete as of 2026-09-24 and deployed:
-`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.2.0),
+`eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.3.0),
 `eskom-grid-hourly` (EventBridge Scheduler) - all live in af-south-1 and
 writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
 `infra/terraform.tfstate` (git-ignored). Destroy → rebuild → restore was
@@ -105,9 +105,8 @@ destroy`; the README has the rebuild-and-restore steps.
 Open follow-up: Lambda's default async retries apply despite the schedule's
 retry 0 (Phase 3).
 
-Next: Phase 2 - the transform (dbt) function. Planned, approved and spiked on
-2026-09-24: read `docs/PHASE2_PLAN.md` first. Part A happens in the companion
-repo (a session opened there) and ends with tag `v0.3.0`; Part B happens here
-after that tag exists. Key decisions: ADR 0006 (only new raw files are read -
-the cutoff must stay a literal on the file read) and ADR 0007 (warehouse
-uploaded with an S3 conditional write).
+Next: Phase 2 Part B - the transform (dbt) function, here. Read
+`docs/PHASE2_PLAN.md` first. Part A is done (app `v0.3.0`, 2026-09-25) and the
+extract function already runs it. Key decisions: ADR 0006 (only new raw files
+are read - the cutoff must stay a literal on the file read) and ADR 0007
+(warehouse uploaded with an S3 conditional write).

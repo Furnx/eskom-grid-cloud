@@ -2,8 +2,9 @@
 
 Written 2026-09-24, after an investigation and a spike against the live bucket.
 Status: **Part A done** — released as `v0.3.0` (commit `2f70d6b`, 2026-09-25).
-**Part B next**, after the extract function is redeployed from `v0.3.0` (Order of
-work, step 2). Part A matched this plan; its session confirmed two points for
+Order of work step 2 done: the extract function was redeployed from `v0.3.0`
+(2026-09-25 14:30 SAST) and its next hourly run landed both areas cleanly.
+**Part B next.** Part A matched this plan; its session confirmed two points for
 Part B: `pipeline_run_log` no longer exists anywhere (neither asset nor table),
 and `dbt deps` at image build time is required, not optional (see B2).
 
