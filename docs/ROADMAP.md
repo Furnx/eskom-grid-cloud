@@ -69,11 +69,15 @@ Plan and spike results: [PHASE2_PLAN.md](PHASE2_PLAN.md). Decisions:
 [ADR 0006](adr/0006-transform-reads-only-new-raw-files.md) (only new raw files are read),
 [ADR 0007](adr/0007-single-writer-for-the-warehouse.md) (one writer for the warehouse).
 
-**2a — Application** (eskom-grid-observability `v0.3.0`):
-- [ ] Landing model `stg_eskom__raw_payloads`: the only S3 reader, new files only
-- [ ] `fct_pipeline_runs` derived from raw files; Dagster `pipeline_run_log` asset removed
-- [ ] `run_transform()`, a `[transform]` extra, and a `prod` profile for S3
-- [ ] Fixture tests (including one event); release `v0.3.0`
+**2a — Application** ✅ 2026-09-25 — [eskom-grid-observability@v0.3.0](https://github.com/Furnx/eskom-grid-observability/releases/tag/v0.3.0):
+- [x] Landing model `stg_eskom__raw_payloads`: the only S3 reader, new files only
+- [x] `fct_pipeline_runs` derived from raw files; Dagster `pipeline_run_log` asset removed
+- [x] `run_transform()`, a `[transform]` extra, and a `prod` profile for S3
+- [x] Fixture tests (including one event); release `v0.3.0`
+
+Verified before release against the 55 real files: 40/40 dbt nodes pass; a
+second build re-read 2 files instead of 55; the compiled SQL carries the cutoff
+as a literal on the file read; importing `eskom_grid.transform` does not import dbt.
 
 **2b — Platform**:
 - [ ] ECR repository and container image with `dbt-core` + `dbt-duckdb` (arm64)

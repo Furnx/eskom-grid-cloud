@@ -1,7 +1,11 @@
 # Phase 2 plan — transform in the cloud
 
 Written 2026-09-24, after an investigation and a spike against the live bucket.
-Status: **approved; Part A not started.**
+Status: **Part A done** — released as `v0.3.0` (commit `2f70d6b`, 2026-09-25).
+**Part B next**, after the extract function is redeployed from `v0.3.0` (Order of
+work, step 2). Part A matched this plan; its session confirmed two points for
+Part B: `pipeline_run_log` no longer exists anywhere (neither asset nor table),
+and `dbt deps` at image build time is required, not optional (see B2).
 
 Phase 2 spans both repositories. **Part A** is done in a Claude Code session
 opened in `eskom-grid-observability` and ends with release tag `v0.3.0`.
@@ -181,7 +185,8 @@ immutable tags; scan on push; lifecycle policy keeping the last 3 images;
 source archive for `APP_VERSION` from GitHub; `pip install ".[transform]"` and a
 pinned boto3 new enough for `put_object(IfMatch=…)`; copy `dbt_project/` into the
 image with `profiles.yml` made from `profiles.yml.example`; run `dbt deps` at build
-time; install the `httpfs` and `aws` DuckDB extensions at build time into
+time — **required**: `fct_pipeline_runs` uses `dbt_utils.generate_surrogate_key`, so
+without `dbt_packages/` in the image every build fails; install the `httpfs` and `aws` DuckDB extensions at build time into
 `/opt/duckdb_extensions`; add `handler.py`.
 
 **B3. `functions/transform/handler.py`** (new, thin): download the warehouse to
