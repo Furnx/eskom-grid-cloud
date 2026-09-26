@@ -15,6 +15,7 @@ first run, only if there is still no object at all. Two overlapping runs can
 therefore never silently overwrite each other; the later one fails instead.
 """
 
+import importlib.metadata
 import logging
 import os
 import shutil
@@ -30,6 +31,12 @@ from eskom_grid.transform import run_transform
 # above INFO, so the application's log lines would otherwise be dropped.
 logging.getLogger().setLevel(logging.INFO)
 log = logging.getLogger("eskom_grid")
+
+# The version pip recorded when it installed the package, read from the
+# package's own metadata: it describes the code in this image, not what
+# Terraform believes it deployed. (eskom_grid.__version__ is not maintained.)
+# The build script's smoke test refuses an image where it disagrees with the tag.
+APP_VERSION = importlib.metadata.version("eskom-grid")
 
 # Created at import time so the client is reused across warm invocations.
 _s3 = boto3.client("s3")
@@ -100,9 +107,14 @@ def lambda_handler(event, context):
     """Run one transform. Returns a JSON-serialisable summary of the run.
 
     Exceptions are deliberately allowed to propagate: Lambda records the failure
-    and, from Phase 3, Step Functions matches on the exception class name
-    (TransformError, WarehouseConflictError) to decide what to do next.
+    and, from Phase 3, Step Functions receives the exception's class name as the
+    error (TransformError, WarehouseConflictError, ...) and puts it in the
+    failure alert. None of them is retried: the next hourly run reads whatever
+    this one missed (ADR 0006).
     """
+    # First, so that every run's logs say which code produced them.
+    log.info(f"Transform run starting (eskom-grid {APP_VERSION}).")
+
     # Read by dbt rather than here, but checked here: unset, the source falls
     # back to a local path and the run would fail later, less clearly.
     if not os.environ.get("ESKOM_RAW_GLOB", "").startswith("s3://"):
@@ -131,6 +143,7 @@ def lambda_handler(event, context):
     log.info(f"Warehouse uploaded ({db_path.stat().st_size} bytes, ETag {new_etag}).")
 
     return {
+        "app_version": APP_VERSION,
         "first_run": etag is None,
         "total_nodes": summary.total_nodes,
         "passed": summary.passed,
