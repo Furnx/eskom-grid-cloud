@@ -2,7 +2,8 @@
 #
 # One role per component, because in AWS every component authenticates as itself:
 #   * each Lambda's execution role — what that function's code may do
-#   * the scheduler's role         — permission to invoke those two functions
+#   * the state machine's role     — invoke those two functions, publish alerts
+#   * the scheduler's role         — start the state machine, nothing else
 #
 # Every resource below is addressed by reference (aws_s3_bucket.raw.arn) rather
 # than a typed-out ARN, so a name can never drift out of sync with a policy.
@@ -161,6 +162,70 @@ resource "aws_iam_role_policy" "transform" {
   policy = data.aws_iam_policy_document.transform.json
 }
 
+# ── Step Functions role (Phase 3) ─────────────────────────────────────────────
+
+data "aws_iam_policy_document" "pipeline_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["states.amazonaws.com"]
+    }
+
+    # Step Functions assumes the role on behalf of one state machine and says
+    # which. These conditions accept only this one, in this account, so no other
+    # state machine - here or in another account - can be given this role and
+    # act with its permissions (the "confused deputy" problem). The ARN is
+    # written out in orchestration.tf, because referring to the state machine
+    # from its own role's policy would be a cycle.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = [local.pipeline_arn]
+    }
+  }
+}
+
+resource "aws_iam_role" "pipeline" {
+  name               = local.pipeline_name
+  description        = "Role of the pipeline state machine: invoke the extract and transform functions, publish failure alerts."
+  assume_role_policy = data.aws_iam_policy_document.pipeline_assume_role.json
+}
+
+data "aws_iam_policy_document" "pipeline" {
+  # The unqualified ARNs: the state machine always invokes the latest code.
+  statement {
+    sid     = "InvokePipelineFunctionsOnly"
+    effect  = "Allow"
+    actions = ["lambda:InvokeFunction"]
+    resources = [
+      aws_lambda_function.extract.arn,
+      aws_lambda_function.transform.arn,
+    ]
+  }
+
+  statement {
+    sid       = "PublishAlertsOnly"
+    effect    = "Allow"
+    actions   = ["sns:Publish"]
+    resources = [aws_sns_topic.alerts.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "pipeline" {
+  name   = local.pipeline_name
+  role   = aws_iam_role.pipeline.id
+  policy = data.aws_iam_policy_document.pipeline.json
+}
+
 # ── EventBridge Scheduler role ────────────────────────────────────────────────
 
 data "aws_iam_policy_document" "scheduler_assume_role" {
@@ -177,19 +242,18 @@ data "aws_iam_policy_document" "scheduler_assume_role" {
 
 resource "aws_iam_role" "scheduler" {
   name               = "${var.project_name}-scheduler"
-  description        = "Lets EventBridge Scheduler invoke the project's two Lambdas, and nothing else."
+  description        = "Lets EventBridge Scheduler start the pipeline state machine, and nothing else."
   assume_role_policy = data.aws_iam_policy_document.scheduler_assume_role.json
 }
 
+# Since Phase 3 the scheduler starts the state machine and never invokes a
+# function itself, so it has no Lambda permission at all.
 data "aws_iam_policy_document" "scheduler" {
   statement {
-    sid     = "InvokeProjectFunctionsOnly"
-    effect  = "Allow"
-    actions = ["lambda:InvokeFunction"]
-    resources = [
-      aws_lambda_function.extract.arn,
-      aws_lambda_function.transform.arn,
-    ]
+    sid       = "StartPipelineOnly"
+    effect    = "Allow"
+    actions   = ["states:StartExecution"]
+    resources = [aws_sfn_state_machine.pipeline.arn]
   }
 }
 

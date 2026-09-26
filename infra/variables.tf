@@ -127,16 +127,6 @@ variable "transform_timeout_seconds" {
   default     = 300
 }
 
-variable "transform_schedule_expression" {
-  description = <<-EOT
-    Ten past the hour: extract fires on the hour and finishes in seconds. A
-    fixed offset is a stopgap; Phase 3 runs the two in order in Step
-    Functions. Same six-field format as schedule_expression.
-  EOT
-  type        = string
-  default     = "cron(10 * * * ? *)"
-}
-
 variable "warehouse_noncurrent_version_expiration_days" {
   description = <<-EOT
     How long superseded versions of the warehouse file are kept. It is replaced
@@ -155,4 +145,25 @@ variable "ecr_images_to_keep" {
   EOT
   type        = number
   default     = 3
+}
+
+# ── Alerting (Phase 3) ───────────────────────────────────────────────────────
+
+variable "alert_email" {
+  description = <<-EOT
+    Address that receives failure alerts (ADR 0010). No default and never
+    committed: set it in infra/terraform.tfvars, which is git-ignored. After
+    the first apply AWS emails a confirmation link, and nothing is delivered
+    until it is clicked.
+  EOT
+  type        = string
+
+  # Plans then print it as "(sensitive value)". From Phase 4 they run in CI,
+  # whose logs are visible to anyone who can see the repository.
+  sensitive = true
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.alert_email))
+    error_message = "alert_email must be an email address."
+  }
 }
