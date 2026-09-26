@@ -52,8 +52,10 @@ output "verify_commands" {
     # Recent logs:
     aws logs tail ${aws_cloudwatch_log_group.extract.name} --since 15m --profile ${var.aws_profile} --region ${var.aws_region}
 
-    # Run the transform once (reads the new raw files, replaces the warehouse):
-    aws lambda invoke --function-name ${aws_lambda_function.transform.function_name} --profile ${var.aws_profile} --region ${var.aws_region} response.json; cat response.json
+    # Run the transform once (reads the new raw files, replaces the warehouse).
+    # The CLI gives up waiting after 60 s by default and then invokes AGAIN, which
+    # would start a second, overlapping run; so wait longer than the function may run:
+    aws lambda invoke --function-name ${aws_lambda_function.transform.function_name} --cli-read-timeout ${var.transform_timeout_seconds + 10} --profile ${var.aws_profile} --region ${var.aws_region} response.json; cat response.json
 
     # The warehouse, and the transform's logs:
     aws s3api head-object --bucket ${aws_s3_bucket.raw.bucket} --key warehouse/eskom_data.duckdb --profile ${var.aws_profile} --region ${var.aws_region}
