@@ -97,9 +97,11 @@ docker buildx build `
 if ($LASTEXITCODE -ne 0) { throw "docker build failed." }
 
 # Smoke tests run under the restrictions Lambda imposes: no network, a
-# read-only filesystem except /tmp, and a user that is neither root nor the
-# owner of the files (the uid itself is arbitrary).
-$lambdaLike = @("--platform", $Platform, "--network", "none",
+# read-only filesystem except /tmp, a user that is neither root nor the owner
+# of the files (the uid itself is arbitrary), and no /dev/shm. Docker provides
+# /dev/shm by default and Lambda does not; without it, multiprocessing locks
+# (which dbt creates) cannot be made. That difference first showed in the cloud.
+$lambdaLike = @("--platform", $Platform, "--network", "none", "--ipc", "none",
                 "--read-only", "--tmpfs", "/tmp", "--user", "993:990")
 
 # 1. What the handler imports is present, Dagster is not, and the runtime's
@@ -117,23 +119,45 @@ print(f'imports and boto3 {boto3.__version__}: OK')
 $check | docker run --rm -i @lambdaLike --entrypoint python $image -
 if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (imports)." }
 
-# 2. dbt compiles the project through the image's own prod profile: the
-#    profile parses, DuckDB opens a database in /tmp and loads both extensions
-#    from the image, and dbt writes nothing outside /tmp. Loading the extensions
-#    directly would not do: a profile that points DuckDB elsewhere passed that.
+# 2. A full dbt build on the path production takes: run_transform(), the
+#    function the handler calls, with the image's own prod profile, on one raw
+#    file written here. It covers the profile, loading both DuckDB extensions
+#    from the image, the missing /dev/shm, and closing the database before
+#    returning: a separate process must then find the row in the file on disk.
+#    Calling the dbt command line instead would skip run_transform(), and with
+#    it the code these checks are about; an earlier version of this test did,
+#    and passed or failed for the wrong reasons.
 #    The credentials are placeholders; DuckDB's S3 secret refuses to be
 #    created without some, and with no network nothing can use them.
-docker run --rm @lambdaLike `
-    -e "ESKOM_DUCKDB_PATH=/tmp/smoke/eskom_data.duckdb" `
-    -e "ESKOM_RAW_GLOB=s3://smoke-test/raw/**/*.json" `
+$build = @'
+import json, os, pathlib, subprocess, sys
+from eskom_grid.transform import run_transform
+work = pathlib.Path('/tmp/smoke')
+area = work / 'raw' / 'za_gt_jhb_johannesburg_9hfs'
+area.mkdir(parents=True)
+(area / '20260101_000000.json').write_text(json.dumps({'events': [], '_meta': {
+    'area_id': 'za_gt_jhb_johannesburg_9hfs', 'area_name': 'Johannesburg',
+    'municipality': 'City of Johannesburg', 'province': 'Gauteng'}}))
+db = work / 'eskom_data.duckdb'
+os.environ['ESKOM_RAW_GLOB'] = str(work / 'raw') + '/**/*.json'
+os.environ['ESKOM_DUCKDB_PATH'] = str(db)
+summary = run_transform('/var/task/dbt_project', target='prod',
+                        target_path=work / 'target', log_path=work / 'logs')
+assert not list(work.glob('*.wal')), 'the database was left open (.wal beside it)'
+count = 'import duckdb, sys; print(duckdb.connect(sys.argv[1], read_only=True).sql(' \
+        + repr('select count(*) from stg_eskom__raw_payloads') + ').fetchone()[0])'
+rows = subprocess.run([sys.executable, '-c', count, str(db)],
+                      capture_output=True, text=True, check=True).stdout.strip()
+assert rows == '1', f'expected 1 landed row on disk, found {rows}'
+print(f'run_transform: {summary.passed}/{summary.total_nodes} nodes, file complete on disk: OK')
+'@
+$build | docker run --rm -i @lambdaLike `
+    -e "DBT_QUIET=true" `
     -e "AWS_REGION=af-south-1" `
     -e "AWS_ACCESS_KEY_ID=smoke-test-placeholder" `
     -e "AWS_SECRET_ACCESS_KEY=smoke-test-placeholder" `
-    --entrypoint dbt $image compile --quiet `
-    --project-dir /var/task/dbt_project --profiles-dir /var/task/dbt_project `
-    --target prod --target-path /tmp/smoke/target --log-path /tmp/smoke/logs
-if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (dbt compile, prod profile)." }
-Write-Host "dbt compile through the prod profile, offline and read-only: OK"
+    --entrypoint python $image -
+if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (dbt build through run_transform)." }
 
 $sizeMb = [math]::Round((docker image inspect $image --format "{{.Size}}") / 1MB)
 
@@ -145,7 +169,7 @@ if (-not $Push) {
     return
 }
 
-# ── Push to ECR ──────────────────────────────────────────────────────────────
+# -- Push to ECR --------------------------------------------------------------
 # Existence checks use queries that come back empty rather than failing, so no
 # error output needs suppressing (Windows PowerShell can turn it into an
 # exception).
