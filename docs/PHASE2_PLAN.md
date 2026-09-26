@@ -3,13 +3,17 @@
 Written 2026-09-24, after an investigation and a spike against the live bucket.
 Status: **Part A done** — released as `v0.3.0` (commit `2f70d6b`, 2026-09-25),
 patched as `v0.3.1` (commit `bf9c3a2`, same day) after the image tests in Part B
-exposed two faults (see "Part B, chunk 1 results"). Order of work step 2 done:
-the extract function was redeployed from `v0.3.0` (2026-09-25 14:30 SAST), then
-from `v0.3.1` (19:07 SAST). Part A's session confirmed two points for Part B:
-`pipeline_run_log` no longer exists anywhere (neither asset nor table), and
-`dbt deps` at image build time is required, not optional (see B2).
+exposed two faults (see "Part B, chunk 1 results"), and as `v0.3.2` (commit
+`8b5fe0d`, 2026-09-26) after the first real Lambda run exposed a third (see
+"Chunk 2 results"). Order of work step 2 done: the extract function was
+redeployed from `v0.3.0` (2026-09-25 14:30 SAST), `v0.3.1` (19:07 SAST) and
+`v0.3.2` (2026-09-26 13:11 SAST). Part A's session confirmed two points for
+Part B: `pipeline_run_log` no longer exists anywhere (neither asset nor table),
+and `dbt deps` at image build time is required, not optional (see B2).
 **Part B:** chunk 1 (image, handler, build script, local tests) done 2026-09-25;
-**chunk 2 next** (ECR, transform Lambda, role, schedule, lifecycle split).
+chunk 2 (ECR, transform Lambda, role, schedule, lifecycle split) deployed
+2026-09-26, first successful cloud run 13:13 SAST; **chunk 3 next** (the
+two-run milestone, memory tuning, docs).
 
 Phase 2 spans both repositories. **Part A** is done in a Claude Code session
 opened in `eskom-grid-observability` and ends with release tag `v0.3.0`.
@@ -242,6 +246,34 @@ Carried into chunk 2:
 - **B4, push:** tags are `<app_version>-<commit>` and ECR tags will be
   immutable, so pushing a second build of the same commit must be refused or
   skipped, not overwrite.
+
+### Chunk 2 results (2026-09-26)
+
+Deployed: `infra/registry.tf` (ECR repository, keep-3 rule, repository policy
+for this one function), the transform function, role and log group, the hh:10
+schedule (retries explicitly 0), and the split lifecycle rule; `-Push` on the
+build script. After the apply, `terraform plan` reported no changes and ECR held
+only the declared repository policy; `simulate-principal-policy` confirmed the
+role's 5 intended allows and 6 tested denies.
+
+- **A third fault, found only in Lambda:** the first run failed with
+  `[Errno 2] No such file or directory` in `multiprocessing` (Lambda has no
+  `/dev/shm`, so no POSIX semaphores). Fixed in app `v0.3.2` (thread locks
+  when no semaphore can be made). The image smoke tests now run with
+  `--ipc none` and build through `run_transform()` itself.
+- **First successful cloud run, 13:13 SAST** (image `v0.3.2-e47b7c0`, digest
+  `7254ea6b…`): 40/40; init 0.57 s; duration 21.1 s (about 6 s importing dbt,
+  10 s building); **max memory 401 MB of 1024**; read 38 new raw files of 141;
+  warehouse 1,847,296 bytes. The downloaded copy matches the bucket: 141
+  landing rows, 71 runs.
+- **Deploy timing:** the 13:10 run and Lambda's first retry (3 s after the
+  update completed) still ran the old image; the second retry ran v0.3.2. Avoid
+  deploying in the minute a schedule fires.
+
+Carried into chunk 3: the two-run milestone (14:10 and 15:10 SAST onwards);
+memory, from the REPORT lines (401 MB used); B9's docs; and whether the handler
+should log the app version at the start of each run (it would have made the
+deploy timing above obvious).
 
 **B1. `infra/registry.tf`** (new): ECR repository `eskom-grid-transform`;
 immutable tags; scan on push; lifecycle policy keeping the last 3 images;

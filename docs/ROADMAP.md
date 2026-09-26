@@ -85,11 +85,18 @@ faults a laptop cannot show — DuckDB extensions looked for in a read-only home
 directory, and the database left open (tables still in the `.wal`) when
 `run_transform()` returned. Both fixed with regression tests.
 
-**2b — Platform**:
-- [ ] ECR repository and container image with `dbt-core` + `dbt-duckdb` (arm64)
-- [ ] Transform Lambda: DuckDB reads `s3://…/raw/` directly (httpfs); warehouse pulled from and pushed back to `s3://…/warehouse/` with a conditional write
-- [ ] Least-privilege role: list and read `raw/*`, read + write `warehouse/*`, nothing else
-- [ ] Second schedule at hh:10 (temporary until Phase 3)
+**2b — Platform** (deployed 2026-09-26):
+- [x] ECR repository and container image with `dbt-core` + `dbt-duckdb` (arm64)
+- [x] Transform Lambda: DuckDB reads `s3://…/raw/` directly (httpfs); warehouse pulled from and pushed back to `s3://…/warehouse/` with a conditional write
+- [x] Least-privilege role: list and read `raw/*`, read + write `warehouse/*`, nothing else
+- [x] Second schedule at hh:10 (temporary until Phase 3)
+
+The first real Lambda run exposed a third environment difference, no
+`/dev/shm` (so no POSIX semaphores for dbt's locks), fixed in
+[v0.3.2](https://github.com/Furnx/eskom-grid-observability/releases/tag/v0.3.2).
+First successful cloud run 2026-09-26 13:13 SAST: 40/40, 21.7 s billed,
+401 MB of 1024 MB, 38 new raw files read of 141. Details in
+[PHASE2_PLAN.md](PHASE2_PLAN.md), "Chunk 2 results".
 
 **Milestone:** `fct_pipeline_runs` gains a row every hour in the cloud without the
 laptop, and a fixture proves events reach `fct_grid_events`. (Amended 2026-09-24:
