@@ -30,3 +30,5 @@ Format (after Michael Nygard): see [template.md](template.md).
 | [0006](0006-transform-reads-only-new-raw-files.md) | The transform reads only new raw files | Accepted |
 | [0007](0007-single-writer-for-the-warehouse.md) | One writer for the warehouse, enforced by S3 conditional writes | Accepted |
 | [0008](0008-transform-image-deployed-by-digest.md) | The transform image is pushed by a script and deployed by digest | Accepted |
+| [0009](0009-retry-only-failures-around-a-function.md) | Only failures around a function are retried | Accepted |
+| [0010](0010-failure-branch-and-backstop-alarm.md) | Failures are emailed by the failure branch, with an alarm as backstop | Accepted |
