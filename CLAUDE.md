@@ -74,9 +74,18 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 - They are learning cloud engineering from zero and want to understand, not just ship:
   investigate, explain what matters, propose a plan, and wait for approval before
   changing files. Their global CLAUDE.md has the full workflow.
-- **Beginner's guide:** delivered 2026-09-24 as `docs/GUIDE.md`, local only (listed in
-  `.git/info/exclude`, never committed). Grounded in these files and live output;
-  revise it when a phase lands.
+- **Beginner's guide:** `docs/GUIDE.md`, local only (listed in `.git/info/exclude`,
+  never commit it). Grounded in these files and live output. Keep it current as
+  you work, not only at the end of a phase:
+  - **Lessons log (Part 10):** when a real bug or near miss happens, add the next
+    numbered lesson the same day. Chronological, written for a beginner, the same
+    four lines each time: Symptom, Cause, Fix, Lesson (one sentence). Point to fuller
+    write-ups (plan docs, ADRs, the app's `docs/UNDERSTANDING.md` §18) instead of
+    repeating them. Check the facts against logs or code, and say plainly when a
+    mistake was Claude's.
+  - **When a phase lands:** add a part for it, as Part 9 does for Phase 2 (the new
+    pieces, one real run traced through its logs, Check-yourself questions), and
+    correct anything the phase made stale (versions, counts, commands, status).
 
 ## Where things are
 
