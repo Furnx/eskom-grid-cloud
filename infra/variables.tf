@@ -107,9 +107,11 @@ variable "noncurrent_version_expiration_days" {
 
 variable "transform_memory_mb" {
   description = <<-EOT
-    Memory for the transform Lambda; CPU scales with it. A starting point only:
-    the local emulator cannot measure memory, so tune this from "Max Memory
-    Used" in the function's REPORT log lines.
+    Memory for the transform Lambda; CPU scales with it. Measured 2026-09-26:
+    an hourly run peaks at about 400 MB and bills 11-12 s. Kept at 1024: less
+    memory would mostly mean less CPU and a longer run at about the same cost,
+    with little headroom. Re-check "Max Memory Used" in the REPORT lines as the
+    warehouse grows.
   EOT
   type        = number
   default     = 1024
