@@ -29,3 +29,4 @@ Format (after Michael Nygard): see [template.md](template.md).
 | [0005](0005-raw-history-outlives-infrastructure.md) | Raw history outlives the infrastructure | Accepted |
 | [0006](0006-transform-reads-only-new-raw-files.md) | The transform reads only new raw files | Accepted |
 | [0007](0007-single-writer-for-the-warehouse.md) | One writer for the warehouse, enforced by S3 conditional writes | Accepted |
+| [0008](0008-transform-image-deployed-by-digest.md) | The transform image is pushed by a script and deployed by digest | Accepted |
