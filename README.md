@@ -237,6 +237,27 @@ aws logs tail /aws/lambda/eskom-grid-transform --since 15m `
   --profile eskom-admin --region af-south-1
 ```
 
+### Look at the warehouse
+
+The warehouse is a single DuckDB file in S3. To query it, the script below
+downloads the current version into a temporary folder, opens it read-only in
+the DuckDB command-line tool (`winget install DuckDB.cli`), and deletes the
+copy when you quit. It never uploads: the transform function owns that object.
+
+```powershell
+# Explore interactively: SQL ending in ';', .tables to list tables, .quit to leave
+./scripts/look_at_warehouse.ps1
+
+# Or ask one question and exit (text values in single quotes)
+./scripts/look_at_warehouse.ps1 -Query "SELECT count(*) AS runs FROM fct_pipeline_runs"
+
+# Keep the copy, e.g. to practise offline
+./scripts/look_at_warehouse.ps1 -KeepCopyIn "$HOME\eskom-grid-practice"
+```
+
+`fct_pipeline_runs` has one row per extraction run (a new row every hour);
+times are stored in UTC, so add `INTERVAL 2 HOUR` for SAST.
+
 ### Destroy
 
 `terraform destroy` removes infrastructure, never history
@@ -329,6 +350,6 @@ eskom-grid-cloud/
 │   ├── extract/              handler.py, shipped as a zip
 │   └── transform/            handler.py + Dockerfile, shipped as an image
 ├── .github/workflows/        plan on PR, apply on main               (Phase 4)
-└── scripts/                  build (zip, image + push), purge; smoke test (Phase 1–2, 5)
+└── scripts/                  build (zip, image + push), purge, look at the warehouse; smoke test (Phase 1–2, 5)
 ```
 WTC-PQ6WCN86
