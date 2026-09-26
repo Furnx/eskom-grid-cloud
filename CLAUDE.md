@@ -94,9 +94,10 @@ writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
 proven on 2026-09-24; Terraform never deletes the raw history (ADR 0005).
 
 Build before planning: `./scripts/build_lambda.ps1` (reads `app_version` from
-`infra/variables.tf`), then `cd infra; terraform plan`. `archive_file` is a data
-source read at plan time, so `build/lambda/` must exist first, and a precondition
-refuses a build made from a different version.
+`infra/variables.tf`) and, since Phase 2, `./scripts/build_transform_image.ps1
+-Push`, then `cd infra; terraform plan`. The plan reads `build/lambda/` (via
+`archive_file`) and `build/transform_image_tag.txt` (via `aws_ecr_image`), and
+preconditions refuse either one if it was built from a different version.
 
 Full teardown is `scripts/purge_bucket.ps1 -BackupPath <new folder>` (backs up,
 verifies every file by MD5, then asks for the bucket name), then `terraform
@@ -105,19 +106,21 @@ destroy`; the README has the rebuild-and-restore steps.
 Open follow-up: Lambda's default async retries apply despite the schedule's
 retry 0 (Phase 3).
 
-Now: Phase 2 Part B - the transform (dbt) function, here. Read
-`docs/PHASE2_PLAN.md` first (its "Chunk 1 results" and "Chunk 2 results").
-Part A is done (app `v0.3.2`, 2026-09-26) and both functions run it. Chunks 1
-and 2 are done: `eskom-grid-transform` (container image in ECR repository
-`eskom-grid-transform`, deployed by digest) runs at hh:10 and keeps
-`warehouse/eskom_data.duckdb`; first successful cloud run 2026-09-26 13:13 SAST.
+Phase 2 complete as of 2026-09-26 (milestone: the 14:10 and 15:10 SAST runs
+each added a `fct_pipeline_runs` row). Both functions run app `v0.3.2`.
+`eskom-grid-transform` (container image in ECR repository
+`eskom-grid-transform`, deployed by digest, ADR 0008) runs at hh:10 and keeps
+`warehouse/eskom_data.duckdb`. `docs/PHASE2_PLAN.md` has the full record.
 Deploying it: `./scripts/build_transform_image.ps1 -Push` (needs Docker
 Desktop; smoke tests run offline, read-only, without /dev/shm, through
 `run_transform()`; ~2 min from cache, ~13 min after an app change), which writes
 `build/transform_image_tag.txt` for the plan; then `terraform plan`/`apply`.
 The first deploy of an empty registry needs
 `terraform apply "-target=aws_ecr_repository.transform"` first (quoted in
-PowerShell). Next: chunk 3 (two consecutive hourly runs each adding a
-`fct_pipeline_runs` row, memory tuning, README/docs). Key decisions: ADR 0006
-(only new raw files are read - the cutoff must stay a literal on the file read)
-and ADR 0007 (warehouse uploaded with an S3 conditional write).
+PowerShell). Avoid deploying in the minute a schedule fires (hh:00, hh:10).
+Key decisions: ADR 0006 (only new raw files are read - the cutoff must stay a
+literal on the file read), ADR 0007 (warehouse uploaded with an S3 conditional
+write), ADR 0008 (image pushed by script, deployed by digest).
+
+Next: Phase 3 (Step Functions extract -> transform, SNS alerting, retries owned
+by the state machine, handlers logging the app version). See docs/ROADMAP.md.

@@ -12,8 +12,8 @@ Part B: `pipeline_run_log` no longer exists anywhere (neither asset nor table),
 and `dbt deps` at image build time is required, not optional (see B2).
 **Part B:** chunk 1 (image, handler, build script, local tests) done 2026-09-25;
 chunk 2 (ECR, transform Lambda, role, schedule, lifecycle split) deployed
-2026-09-26, first successful cloud run 13:13 SAST; **chunk 3 next** (the
-two-run milestone, memory tuning, docs).
+2026-09-26, first successful cloud run 13:13 SAST; chunk 3 (milestone, memory
+decision, docs) done the same day. **Phase 2 complete** (see "Chunk 3 results").
 
 Phase 2 spans both repositories. **Part A** is done in a Claude Code session
 opened in `eskom-grid-observability` and ends with release tag `v0.3.0`.
@@ -274,6 +274,22 @@ Carried into chunk 3: the two-run milestone (14:10 and 15:10 SAST onwards);
 memory, from the REPORT lines (401 MB used); B9's docs; and whether the handler
 should log the app version at the start of each run (it would have made the
 deploy timing above obvious).
+
+### Chunk 3 results (2026-09-26)
+
+- **Milestone met.** The 14:10 and 15:10 SAST scheduled runs each added one
+  `fct_pipeline_runs` row (71 → 72 → 73): 40/40, first attempt, dbt build
+  ~3.3 s, billed 12.1 s and 11.2 s, 387 and 396 MB. Each downloaded the ETag
+  the previous run uploaded. The downloaded warehouse matched the bucket (145
+  raw files, 145 landing rows), and each run read 4 files: the previous run
+  again (the `>=` cutoff) and the new one.
+- **Memory stays at 1024 MB** (the owner's decision). About 400 MB is used, and
+  CPU scales with memory, so less would mostly mean slower; either way the
+  transform uses about 2% of Lambda's free compute.
+- **Version logging** in the handlers is deferred to Phase 3 (ROADMAP).
+- **Docs:** README (status, a "running today" diagram, deploy / verify /
+  destroy / rebuild with the image steps, measured costs, layout); ADR 0008
+  (image pushed by a script, deployed by digest); ROADMAP; CLAUDE.md.
 
 **B1. `infra/registry.tf`** (new): ECR repository `eskom-grid-transform`;
 immutable tags; scan on push; lifecycle policy keeping the last 3 images;

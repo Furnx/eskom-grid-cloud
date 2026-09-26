@@ -2,7 +2,7 @@
 
 Serverless, zero-cost AWS deployment of the [Eskom Grid Observability](https://github.com/Furnx/eskom-grid-observability) pipeline — infrastructure as code, deployed by CI, running around the clock without a laptop.
 
-> **Status:** Phase 1 complete (2026-09-24): raw JSON lands in S3 every hour without the laptop, and a full destroy → rebuild → restore has been proven. Phase 2 (transform) is next. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status:** Phase 2 complete (2026-09-26): raw JSON lands in S3 on the hour, and ten minutes later a second Lambda runs the dbt models over the new files and updates the DuckDB warehouse in S3 — both without the laptop. Phase 1 (2026-09-24) also proved a full destroy → rebuild → restore. Phase 3 (orchestration and alerting) is next. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## The problem
 
@@ -72,6 +72,44 @@ flowchart LR
     CW -. alarm .-> SNS
 ```
 
+Running today (end of Phase 2). Until Phase 3's state machine, two schedules
+stand in for it, ten minutes apart, and nothing alerts on failure yet:
+
+```mermaid
+flowchart LR
+    API["EskomSePush API v3.0"]
+    SSM["SSM Parameter Store<br/>/eskom-grid/api-key"]
+    ECR["ECR · eskom-grid-transform<br/>container image"]
+
+    subgraph SCHED["EventBridge Scheduler"]
+        direction TB
+        H00["eskom-grid-hourly<br/>hh:00"]
+        H10["eskom-grid-transform-hourly<br/>hh:10"]
+    end
+
+    EXTRACT["Lambda · extract<br/>zip · 256 MB"]
+    TRANSFORM["Lambda · transform<br/>dbt + DuckDB · 1024 MB"]
+
+    subgraph S3["Storage · S3"]
+        RAW[("raw/{area_id}/{ts}.json")]
+        WH[("warehouse/eskom_data.duckdb")]
+    end
+
+    CW["CloudWatch Logs<br/>14 days"]
+
+    H00 --> EXTRACT
+    H10 --> TRANSFORM
+    SSM -. read key .-> EXTRACT
+    API --> EXTRACT
+    EXTRACT --> RAW
+    RAW -- "new files only · ADR 0006" --> TRANSFORM
+    WH --> TRANSFORM
+    TRANSFORM -- "conditional write · ADR 0007" --> WH
+    ECR -. image by digest · ADR 0008 .-> TRANSFORM
+    EXTRACT --> CW
+    TRANSFORM --> CW
+```
+
 Delivery path (Phase 4):
 
 ```mermaid
@@ -97,25 +135,30 @@ The platform installs the application at a **pinned git tag**, so every deployme
 
 Designed for **R0**. The account is on the AWS Free Plan (credits, cannot be charged) and the design uses only services with always-free allowances wherever one exists — see [ADR 0003](docs/adr/0003-zero-cost-constraints.md).
 
-Estimates at hourly cadence for two areas; to be replaced with measured usage in Phase 5. Verify allowances against the AWS pricing pages before relying on them.
+Hourly cadence, two areas. Lambda and ECR figures are measured from the first
+days of Phase 2 (2026-09-26): an extract run bills about 0.8 GB-s, a transform
+run about 12 GB-s (1 GB for ~11–12 s, peaking near 400 MB). The rest are
+estimates, and the Phase 3 rows are not running yet; Phase 5 replaces them with
+a month of measured usage. Prices are af-south-1's, from the AWS Price List API.
 
-| Service | Monthly usage (estimate) | Always-free allowance | Note |
+| Service | Monthly usage | Always-free allowance | Note |
 |---|---|---|---|
-| Lambda | ~1,440 invocations · ~25,000 GB-s | 1M invocations · 400,000 GB-s | always free |
-| Step Functions (Standard) | ~2,200 state transitions | 4,000 | always free — state machine kept to ≤ 5 states |
-| EventBridge Scheduler | 720 invocations | 14M | always free |
+| Lambda | 1,440 invocations · ~9,000 GB-s (measured) | 1M invocations · 400,000 GB-s | always free · ~2% of the compute allowance |
+| Step Functions (Standard) · *Phase 3* | ~2,200 state transitions | 4,000 | always free — state machine kept to ≤ 5 states |
+| EventBridge Scheduler | 1,440 invocations (two schedules) | 14M | always free |
 | SSM Parameter Store | 1 standard parameter | standard parameters free | always free |
-| SNS | < 10 emails | 1,000 emails | always free |
-| CloudWatch | < 100 MB logs · 2 alarms | 5 GB logs · 10 alarms | always free |
-| S3 | ~5 MB · ~3,000 requests | none on the Free Plan | ≈ $0.01 — credits |
-| ECR | 1 image ≤ 500 MB | none on the Free Plan | ≈ $0.05 — credits |
+| SNS · *Phase 3* | < 10 emails | 1,000 emails | always free |
+| CloudWatch | < 100 MB logs | 5 GB logs · 10 alarms | always free |
+| S3 | ~0.2 GB (mostly 3 days of old warehouse versions) · ~2,900 PUT/LIST · ~6,500 GET | none on the Free Plan | ≈ $0.03 — credits |
+| ECR | 3 images × ~265 MB ≈ 0.8 GB (measured) | none on the Free Plan | ≈ $0.08 ($0.10/GB-month) — credits |
 
-Estimated steady state on a paid plan after the Free Plan window (~March 2027): **under $0.10 per month**.
+Estimated steady state on a paid plan after the Free Plan window (~March 2027): **about $0.10 per month**, almost all of it ECR storage and S3 requests.
 
 ## Deploy / destroy
 
 Prerequisites: AWS CLI v2 with the `eskom-admin` profile, Terraform >= 1.6,
-Python 3.13 with `pip`, and an EskomSePush API key.
+Python 3.13 with `pip`, Docker Desktop (the transform image is built locally
+for arm64), and an EskomSePush API key.
 
 ### One-time: store the API key
 
@@ -136,20 +179,37 @@ aws ssm put-parameter `
 ### Deploy
 
 ```powershell
-# 1. Build the Lambda package from the pinned application tag (app_version
-#    in infra/variables.tf). archive_file is read at plan time, so this must
-#    come first; the plan also refuses a build made from a different version.
+# 0. First deployment only: the transform's image needs a repository before it
+#    can be pushed, and the function needs the image. Create the repository
+#    alone first. The quotes matter in PowerShell, which otherwise splits the
+#    argument at the dot.
+cd infra
+terraform init
+terraform apply "-target=aws_ecr_repository.transform"
+cd ..
+
+# 1. Build the extract Lambda package from the pinned application tag
+#    (app_version in infra/variables.tf). archive_file is read at plan time,
+#    so this must come first; the plan also refuses a build made from a
+#    different version.
 ./scripts/build_lambda.ps1
 
-# 2. Review and apply.
+# 2. Build, smoke-test and push the transform image (ADR 0008). The smoke tests
+#    run a real dbt build offline, on a read-only disk, without /dev/shm, as in
+#    Lambda. Only committed code is pushed; the pushed tag is recorded in
+#    build/ for the plan, which deploys it by digest. About 2 minutes from
+#    Docker's cache, 10-15 after an application change.
+./scripts/build_transform_image.ps1 -Push
+
+# 3. Review and apply. Avoid the minute either schedule fires (hh:00, hh:10):
+#    a run that starts mid-deploy gets the old code.
 cd infra
-terraform init      # first time only
 terraform plan      # read this before applying
 terraform apply
 ```
 
-`terraform apply` prints the bucket, function, log group and a set of
-copy-paste verification commands.
+`terraform apply` prints the bucket, both functions, their log groups and
+schedules, the ECR repository and a set of copy-paste verification commands.
 
 ### Verify
 
@@ -164,6 +224,17 @@ aws s3 ls s3://eskom-grid-<account-id>/raw/ --recursive --profile eskom-admin
 # Logs
 aws logs tail /aws/lambda/eskom-grid-extract --since 15m `
   --profile eskom-admin --region af-south-1
+
+# Run the transform once (no API cost). Without --cli-read-timeout the CLI
+# gives up after 60 s and invokes the function a second time.
+aws lambda invoke --function-name eskom-grid-transform --cli-read-timeout 310 `
+  --profile eskom-admin --region af-south-1 response.json; cat response.json
+
+# The warehouse it replaced, and its logs
+aws s3api head-object --bucket eskom-grid-<account-id> --key warehouse/eskom_data.duckdb `
+  --profile eskom-admin --region af-south-1
+aws logs tail /aws/lambda/eskom-grid-transform --since 15m `
+  --profile eskom-admin --region af-south-1
 ```
 
 ### Destroy
@@ -173,8 +244,10 @@ aws logs tail /aws/lambda/eskom-grid-extract --since 15m `
 bucket holds the only copy of data the API cannot return again, so S3's refusal
 to delete a bucket that still holds data is kept as a safety catch.
 
-**A plain `terraform destroy`** removes the schedule, function, roles and log
-group, then stops with `BucketNotEmpty`. The history is intact, but the bucket
+**A plain `terraform destroy`** removes the schedules, functions, roles, log
+groups and the ECR repository *with its images* (they are rebuilt from git,
+[ADR 0008](docs/adr/0008-transform-image-deployed-by-digest.md)), then stops
+with `BucketNotEmpty`. The history is intact, but the bucket
 has lost its public access block, lifecycle rule and versioning;
 `terraform apply` restores them along with everything else.
 
@@ -200,7 +273,12 @@ outside Terraform) and your local backup.
 ### Rebuild and restore
 
 ```powershell
+# The same order as a first deployment: repository, image, everything else.
+cd infra
+terraform apply "-target=aws_ecr_repository.transform"
+cd ..
 ./scripts/build_lambda.ps1
+./scripts/build_transform_image.ps1 -Push
 cd infra
 terraform apply
 cd ..
@@ -219,6 +297,9 @@ the name of the bucket that was just deleted: wait a few minutes and run
 `terraform apply` again. Restored objects keep their keys, and the run
 timestamp is part of the key, so the history continues where it stopped. A
 scheduled run that lands before the comparison shows up as extra `=>` lines.
+The backup includes the warehouse, so the transform carries on from it; a
+transform run that fires before the restore is harmless, because the warehouse
+is derived entirely from `raw/`.
 
 ### API quota
 
@@ -243,9 +324,11 @@ eskom-grid-cloud/
 ├── docs/
 │   ├── ROADMAP.md            phases, milestones, status
 │   └── adr/                  architecture decision records
-├── infra/                    Terraform — one file per concern        (Phase 1)
-├── functions/                thin Lambda entry points + Dockerfile   (Phase 1–2)
+├── infra/                    Terraform — one file per concern        (Phase 1–2)
+├── functions/                thin Lambda entry points:               (Phase 1–2)
+│   ├── extract/              handler.py, shipped as a zip
+│   └── transform/            handler.py + Dockerfile, shipped as an image
 ├── .github/workflows/        plan on PR, apply on main               (Phase 4)
-└── scripts/                  build, purge; smoke test                (Phase 1, 5)
+└── scripts/                  build (zip, image + push), purge; smoke test (Phase 1–2, 5)
 ```
 WTC-PQ6WCN86

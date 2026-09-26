@@ -61,7 +61,7 @@ ask for the bucket name, so the backup can no longer be skipped by accident.
 **Milestone:** laptop off overnight → `raw/<area_id>/<ts>.json` objects appear in S3 every hour.
 Met overnight 23–24 September: 20 consecutive hourly runs, both areas, no gaps.
 
-## Phase 2 — Transform in the cloud
+## Phase 2 — Transform in the cloud ✅ 2026-09-26
 
 Goal: the dbt models build in the cloud; the warehouse accumulates history.
 
@@ -102,6 +102,14 @@ First successful cloud run 2026-09-26 13:13 SAST: 40/40, 21.7 s billed,
 laptop, and a fixture proves events reach `fct_grid_events`. (Amended 2026-09-24:
 no loadshedding has been scheduled since collection began, so `fct_grid_events`
 alone cannot show growth yet.)
+Met 2026-09-26: the scheduled runs at 14:10 and 15:10 SAST each added one row
+(71 → 72 → 73), 40/40 dbt nodes, first attempt, no retries; each run downloaded
+exactly the ETag the previous one uploaded. The warehouse matched the bucket
+(145 raw files, 145 landing rows), and each run read 4 files: the previous
+run again (ADR 0006's `>=`) plus the new one. The fixture half was proven by the
+app's tests in 2a.
+[ADR 0008](adr/0008-transform-image-deployed-by-digest.md) records how the image
+is deployed.
 
 ## Phase 3 — Orchestration & alerting
 
@@ -115,7 +123,11 @@ Goal: dependency ordering and failure handling, with a human notified.
       asynchronously, so Lambda's default of two retries applies despite
       `maximum_retry_attempts = 0` on the schedule: a failing hour can spend up to
       6 API requests against a daily buffer of 2. A synchronous invoke from Step
-      Functions removes that layer.
+      Functions removes that layer. (Seen for real on 2026-09-26: the failing
+      12:10 transform ran three times, at 12:10, 12:11 and 12:13.)
+- [ ] Each handler logs the application version at the start of a run. During
+      the v0.3.2 deploy, only a traceback line number showed which code a
+      failing run had used (PHASE2_PLAN.md, "Chunk 2 results").
 
 **Milestone:** break the API key on purpose → an email arrives within one cycle; fix it → the next run succeeds.
 
