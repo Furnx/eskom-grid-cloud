@@ -104,19 +104,26 @@ if ($LASTEXITCODE -ne 0) { throw "docker build failed." }
 $lambdaLike = @("--platform", $Platform, "--network", "none", "--ipc", "none",
                 "--read-only", "--tmpfs", "/tmp", "--user", "993:990")
 
-# 1. What the handler imports is present, Dagster is not, and the runtime's
-#    boto3 supports the conditional write. The script goes in on stdin: Windows
-#    PowerShell mangles quotes inside arguments to native programs.
+# 1. What the handler imports is present, Dagster is not, the runtime's boto3
+#    supports the conditional write, and the version the handler logs (read
+#    from the package's metadata, which comes from pyproject.toml) is the tag
+#    the image was built from. The script goes in on stdin: Windows PowerShell
+#    mangles quotes inside arguments to native programs.
 $check = @'
-import importlib.util, boto3
+import importlib.util, os, boto3
 import eskom_grid.transform, dbt.cli.main, handler
 assert importlib.util.find_spec('dagster') is None, 'Dagster found in the image'
 s3 = boto3.client('s3', region_name='af-south-1')
 params = s3.meta.service_model.operation_model('PutObject').input_shape.members
 assert {'IfMatch', 'IfNoneMatch'} <= set(params), 'boto3 lacks conditional writes'
-print(f'imports and boto3 {boto3.__version__}: OK')
+expected = os.environ['EXPECTED_APP_VERSION']
+assert handler.APP_VERSION == expected, \
+    f'package metadata says {handler.APP_VERSION}, the tag says {expected}'
+print(f'imports, boto3 {boto3.__version__}, eskom-grid {handler.APP_VERSION}: OK')
 '@
-$check | docker run --rm -i @lambdaLike --entrypoint python $image -
+$check | docker run --rm -i @lambdaLike `
+    -e "EXPECTED_APP_VERSION=$($AppVersion.TrimStart('v'))" `
+    --entrypoint python $image -
 if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (imports)." }
 
 # 2. A full dbt build on the path production takes: run_transform(), the

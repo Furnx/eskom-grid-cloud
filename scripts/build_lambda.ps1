@@ -91,6 +91,16 @@ if (Test-Path (Join-Path $BuildDir "dagster")) {
     throw "Dagster found in the Lambda package  -  the dependency boundary has been broken."
 }
 
+# The handler logs the version in the package's metadata (the .dist-info
+# folder), which pip takes from the application's pyproject.toml, not from the
+# git tag. The two have disagreed before, so a mismatch stops the build rather
+# than put the wrong version in every log line.
+$expectedMetadata = "eskom_grid-$($AppVersion.TrimStart('v')).dist-info"
+if (-not (Test-Path (Join-Path $BuildDir $expectedMetadata))) {
+    $found = (Get-ChildItem $BuildDir -Directory -Filter "eskom_grid-*.dist-info").Name -join ", "
+    throw "Package metadata is $found, not ${expectedMetadata}: pyproject.toml at $AppVersion does not match its tag."
+}
+
 # Record what was built, next to (not inside) the package so the zip is
 # unaffected. infra/compute.tf compares it with var.app_version at plan time.
 Set-Content -Path $VersionFile -Value $AppVersion -NoNewline
