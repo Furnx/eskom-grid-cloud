@@ -37,8 +37,11 @@ terraform {
 }
 
 provider "aws" {
-  region  = var.aws_region
-  profile = var.aws_profile
+  region = var.aws_region
+
+  # null lets the provider find credentials the usual way; in CI, the
+  # environment variables that the OIDC sign-in step sets.
+  profile = var.use_aws_profile ? var.aws_profile : null
 
   # Applied to every taggable resource, so nothing can be created untagged and
   # later go unrecognised in the console or on a bill.
