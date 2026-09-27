@@ -111,25 +111,60 @@ app's tests in 2a.
 [ADR 0008](adr/0008-transform-image-deployed-by-digest.md) records how the image
 is deployed.
 
-## Phase 3 — Orchestration & alerting
+## Phase 3 — Orchestration & alerting ✅ 2026-09-27
 
 Goal: dependency ordering and failure handling, with a human notified.
+Decisions: [ADR 0009](adr/0009-retry-only-failures-around-a-function.md) (which
+failures are retried), [ADR 0010](adr/0010-failure-branch-and-backstop-alarm.md)
+(how a failure reaches a human).
 
-- [ ] Step Functions state machine: extract → transform, retries, catch-all
-- [ ] Scheduler targets the state machine instead of the Lambda
-- [ ] SNS topic + email subscription; the failure branch publishes to it
-- [ ] CloudWatch alarm on failed executions → same topic
-- [ ] Retries owned by the state machine. Today the scheduler invokes the Lambda
+- [x] Step Functions state machine `eskom-grid-pipeline`: extract → transform,
+      retries, catch-all. Four states (Extract, Transform, NotifyFailure,
+      RunFailed), JSONata, invoking each function synchronously
+- [x] Scheduler targets the state machine instead of the Lambda; the hh:10
+      transform schedule is gone
+- [x] SNS topic `eskom-grid-alerts` + email subscription; the failure branch
+      publishes to it (the address lives in the git-ignored `terraform.tfvars`)
+- [x] CloudWatch alarm on failed executions → same topic
+- [x] Retries owned by the state machine. Today the scheduler invokes the Lambda
       asynchronously, so Lambda's default of two retries applies despite
       `maximum_retry_attempts = 0` on the schedule: a failing hour can spend up to
       6 API requests against a daily buffer of 2. A synchronous invoke from Step
       Functions removes that layer. (Seen for real on 2026-09-26: the failing
       12:10 transform ran three times, at 12:10, 12:11 and 12:13.)
-- [ ] Each handler logs the application version at the start of a run. During
+      Done: only failures of Lambda itself are retried, and the scheduler's
+      failures to start a run; nothing a handler raises (ADR 0009)
+- [x] Each handler logs the application version at the start of a run. During
       the v0.3.2 deploy, only a traceback line number showed which code a
       failing run had used (PHASE2_PLAN.md, "Chunk 2 results").
+      Done: `… run starting (eskom-grid 0.3.2).`, read from the installed
+      package; the build scripts refuse a package whose version disagrees with
+      its tag
+
+Built in three steps. **Version logging** deployed 2026-09-26 19:17 SAST (image
+`v0.3.2-d623510`); the 20:00 and 20:10 runs were the first to log it.
+**Orchestration** was tested before it existed: AWS's definition validator, 14
+`test-state` cases with mocked results and errors (one found a guard that let
+`null` through), then after the apply 9 IAM simulations. The alert topic was
+created and confirmed first, on its own. Deployed 20:17 SAST; one manual run at
+20:27 succeeded (extract 3.2 s, transform 13 s, one invocation each, a new
+`fct_pipeline_runs` row), and every scheduled run since has succeeded.
+**`scripts/check_pipeline.ps1`** answers "is it healthy?" from the runs
+themselves, since a successful run sends no email.
+
+Measured on the way: Step Functions reports `ExecutionsFailed` after every run
+(`0` or `1`), and the alarm returns to OK by itself about 15 minutes after a
+failure. Green means "no failure recently", not "fixed", so the alarm sends no
+OK email.
 
 **Milestone:** break the API key on purpose → an email arrives within one cycle; fix it → the next run succeeds.
+Met 2026-09-27, between the 15:00 and 16:00 runs so that no scheduled run saw the
+broken key: a wrong key saved as a new version of the SSM parameter (15:10:30);
+one run started by hand failed with `HTTPError` (403) after one extract
+attempt, with nothing written; the failure branch's email left AWS 2 s after
+the run started, the alarm's 50 s later (both delivered). The real key was
+restored from the parameter's history at 15:12:51 without being printed, and
+the 16:00 scheduled run succeeded.
 
 ## Phase 4 — CI/CD
 

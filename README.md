@@ -2,7 +2,7 @@
 
 Serverless, zero-cost AWS deployment of the [Eskom Grid Observability](https://github.com/Furnx/eskom-grid-observability) pipeline — infrastructure as code, deployed by CI, running around the clock without a laptop.
 
-> **Status:** Phase 2 complete (2026-09-26): raw JSON lands in S3 on the hour, and ten minutes later a second Lambda runs the dbt models over the new files and updates the DuckDB warehouse in S3 — both without the laptop. Phase 1 (2026-09-24) also proved a full destroy → rebuild → restore. Phase 3 (orchestration and alerting) is next. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status:** Phase 3 complete (2026-09-27): every hour a Step Functions state machine runs the extract Lambda (raw JSON into S3), then, only if it succeeded, the transform Lambda (dbt over the new files, updating the DuckDB warehouse in S3); any failure is emailed within seconds, with a CloudWatch alarm as backstop — all without the laptop. Phase 1 (2026-09-24) also proved a full destroy → rebuild → restore. Phase 4 (CI/CD) is next. Details in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## The problem
 
@@ -72,33 +72,39 @@ flowchart LR
     CW -. alarm .-> SNS
 ```
 
-Running today (end of Phase 2). Until Phase 3's state machine, two schedules
-stand in for it, ten minutes apart, and nothing alerts on failure yet:
+Running today (end of Phase 3). One schedule starts one state machine, which
+runs the two functions in order. Only failures of Lambda itself are retried
+([ADR 0009](docs/adr/0009-retry-only-failures-around-a-function.md)); every
+other failure is emailed by the failure branch, and an alarm backs it up
+([ADR 0010](docs/adr/0010-failure-branch-and-backstop-alarm.md)):
 
 ```mermaid
 flowchart LR
     API["EskomSePush API v3.0"]
     SSM["SSM Parameter Store<br/>/eskom-grid/api-key"]
     ECR["ECR · eskom-grid-transform<br/>container image"]
+    EB["EventBridge Scheduler<br/>eskom-grid-hourly · hh:00"]
 
-    subgraph SCHED["EventBridge Scheduler"]
+    subgraph SFN["Step Functions · eskom-grid-pipeline"]
         direction TB
-        H00["eskom-grid-hourly<br/>hh:00"]
-        H10["eskom-grid-transform-hourly<br/>hh:10"]
+        EXTRACT["Lambda · extract<br/>zip · 256 MB"]
+        TRANSFORM["Lambda · transform<br/>dbt + DuckDB · 1024 MB"]
+        NOTIFY["NotifyFailure → RunFailed"]
+        EXTRACT -- ok --> TRANSFORM
+        EXTRACT -. error .-> NOTIFY
+        TRANSFORM -. error .-> NOTIFY
     end
-
-    EXTRACT["Lambda · extract<br/>zip · 256 MB"]
-    TRANSFORM["Lambda · transform<br/>dbt + DuckDB · 1024 MB"]
 
     subgraph S3["Storage · S3"]
         RAW[("raw/{area_id}/{ts}.json")]
         WH[("warehouse/eskom_data.duckdb")]
     end
 
+    SNS["SNS · eskom-grid-alerts<br/>→ email"]
+    ALARM["CloudWatch alarm<br/>failed runs ≥ 1"]
     CW["CloudWatch Logs<br/>14 days"]
 
-    H00 --> EXTRACT
-    H10 --> TRANSFORM
+    EB --> SFN
     SSM -. read key .-> EXTRACT
     API --> EXTRACT
     EXTRACT --> RAW
@@ -106,6 +112,9 @@ flowchart LR
     WH --> TRANSFORM
     TRANSFORM -- "conditional write · ADR 0007" --> WH
     ECR -. image by digest · ADR 0008 .-> TRANSFORM
+    NOTIFY --> SNS
+    SFN -. failed runs .-> ALARM
+    ALARM --> SNS
     EXTRACT --> CW
     TRANSFORM --> CW
 ```
@@ -122,7 +131,7 @@ flowchart LR
     APP["eskom-grid-observability@tag"] -. "installed at a pinned tag" .-> GA
 ```
 
-Every workload identity is least-privilege: the extract function may only read one parameter and write into `raw/`; the transform function may read `raw/` and read/write `warehouse/`, nothing else.
+Every workload identity is least-privilege: the extract function may only read one parameter and write into `raw/`; the transform function may read `raw/` and read/write `warehouse/`; the state machine may only invoke those two functions and publish to the alert topic, and only this state machine may assume its role; the scheduler may only start the state machine.
 
 ## How the two repositories relate
 
@@ -137,18 +146,19 @@ Designed for **R0**. The account is on the AWS Free Plan (credits, cannot be cha
 
 Hourly cadence, two areas. Lambda and ECR figures are measured from the first
 days of Phase 2 (2026-09-26): an extract run bills about 0.8 GB-s, a transform
-run about 12 GB-s (1 GB for ~11–12 s, peaking near 400 MB). The rest are
-estimates, and the Phase 3 rows are not running yet; Phase 5 replaces them with
-a month of measured usage. Prices are af-south-1's, from the AWS Price List API.
+run about 12 GB-s (1 GB for ~11–12 s, peaking near 400 MB). Step Functions is
+an early reading from the Free Tier page (44 transitions in the first day of
+Phase 3, 2–3 per run); the rest are estimates. Phase 5 replaces them with a
+month of measured usage. Prices are af-south-1's, from the AWS Price List API.
 
 | Service | Monthly usage | Always-free allowance | Note |
 |---|---|---|---|
 | Lambda | 1,440 invocations · ~9,000 GB-s (measured) | 1M invocations · 400,000 GB-s | always free · ~2% of the compute allowance |
-| Step Functions (Standard) · *Phase 3* | ~2,200 state transitions | 4,000 | always free — state machine kept to ≤ 5 states |
-| EventBridge Scheduler | 1,440 invocations (two schedules) | 14M | always free |
+| Step Functions (Standard) | 720 runs · ~1,500–2,200 state transitions | 4,000 | always free — 4 states, retries only on Lambda faults (ADR 0003, 0009) |
+| EventBridge Scheduler | 720 invocations (one schedule) | 14M | always free |
 | SSM Parameter Store | 1 standard parameter | standard parameters free | always free |
-| SNS · *Phase 3* | < 10 emails | 1,000 emails | always free |
-| CloudWatch | < 100 MB logs | 5 GB logs · 10 alarms | always free |
+| SNS | < 10 emails (2 per failed run) | 1,000 emails | always free |
+| CloudWatch | < 100 MB logs · 1 alarm | 5 GB logs · 10 alarms | always free |
 | S3 | ~0.2 GB (mostly 3 days of old warehouse versions) · ~2,900 PUT/LIST · ~6,500 GET | none on the Free Plan | ≈ $0.03 — credits |
 | ECR | 3 images × ~265 MB ≈ 0.8 GB (measured) | none on the Free Plan | ≈ $0.08 ($0.10/GB-month) — credits |
 
@@ -158,7 +168,7 @@ Estimated steady state on a paid plan after the Free Plan window (~March 2027): 
 
 Prerequisites: AWS CLI v2 with the `eskom-admin` profile, Terraform >= 1.6,
 Python 3.13 with `pip`, Docker Desktop (the transform image is built locally
-for arm64), and an EskomSePush API key.
+for arm64), an EskomSePush API key, and an email address for failure alerts.
 
 ### One-time: store the API key
 
@@ -176,17 +186,33 @@ aws ssm put-parameter `
 
 `terraform destroy` does not remove it, so this step is not repeated.
 
+### One-time: the alert address
+
+Failures are emailed to one address
+([ADR 0010](docs/adr/0010-failure-branch-and-backstop-alarm.md)). It is a
+required Terraform variable, kept out of the repository in
+`infra/terraform.tfvars`, which git ignores:
+
+```hcl
+alert_email = "you@example.com"
+```
+
 ### Deploy
 
 ```powershell
-# 0. First deployment only: the transform's image needs a repository before it
-#    can be pushed, and the function needs the image. Create the repository
-#    alone first. The quotes matter in PowerShell, which otherwise splits the
-#    argument at the dot.
+# 0. First deployment only. Two things must exist before the rest:
+#    - the ECR repository: the transform's image must be pushed into it before
+#      the function can be created;
+#    - the alert topic and subscription: the state machine's definition names
+#      the topic, and AWS must confirm your address before it delivers anything.
+#    Create just those first. The quotes matter in PowerShell, which otherwise
+#    splits each argument at the dot.
 cd infra
 terraform init
-terraform apply "-target=aws_ecr_repository.transform"
+terraform apply "-target=aws_ecr_repository.transform" "-target=aws_sns_topic_subscription.alert_email"
 cd ..
+#    Then click the link in the "AWS Notification - Subscription Confirmation"
+#    email. Until you do, alerts go nowhere.
 
 # 1. Build the extract Lambda package from the pinned application tag
 #    (app_version in infra/variables.tf). archive_file is read at plan time,
@@ -201,22 +227,32 @@ cd ..
 #    Docker's cache, 10-15 after an application change.
 ./scripts/build_transform_image.ps1 -Push
 
-# 3. Review and apply. Avoid the minute either schedule fires (hh:00, hh:10):
+# 3. Review and apply. Avoid hh:00 to hh:01, while the hourly run is going:
 #    a run that starts mid-deploy gets the old code.
 cd infra
 terraform plan      # read this before applying
 terraform apply
 ```
 
-`terraform apply` prints the bucket, both functions, their log groups and
-schedules, the ECR repository and a set of copy-paste verification commands.
+`terraform apply` prints the bucket, both functions and their log groups, the
+schedule, the state machine, the alert topic, the ECR repository and a set of
+copy-paste verification commands.
 
 ### Verify
 
 ```powershell
-# Invoke once (costs 2 of the 50 daily EskomSePush requests)
-aws lambda invoke --function-name eskom-grid-extract `
-  --profile eskom-admin --region af-south-1 response.json; cat response.json
+# Is it healthy? The schedule, the latest runs, the alarm and the alert
+# subscription, then one verdict: HEALTHY, FAILING, STALE or NOT RUNNING.
+# Read-only; it is also how to tell a failure has been fixed, since a
+# successful run sends no email.
+./scripts/check_pipeline.ps1
+
+# Run the whole pipeline once, as the schedule does (costs 2 of the 50 daily
+# EskomSePush requests). Check first that no run is in progress:
+aws stepfunctions list-executions --state-machine-arn arn:aws:states:af-south-1:<account-id>:stateMachine:eskom-grid-pipeline `
+  --status-filter RUNNING --query "executions[].name" --output text --profile eskom-admin --region af-south-1
+aws stepfunctions start-execution --state-machine-arn arn:aws:states:af-south-1:<account-id>:stateMachine:eskom-grid-pipeline `
+  --profile eskom-admin --region af-south-1
 
 # One object per area, all sharing a run timestamp
 aws s3 ls s3://eskom-grid-<account-id>/raw/ --recursive --profile eskom-admin
@@ -225,8 +261,9 @@ aws s3 ls s3://eskom-grid-<account-id>/raw/ --recursive --profile eskom-admin
 aws logs tail /aws/lambda/eskom-grid-extract --since 15m `
   --profile eskom-admin --region af-south-1
 
-# Run the transform once (no API cost). Without --cli-read-timeout the CLI
-# gives up after 60 s and invokes the function a second time.
+# Run only the transform (no API cost). This bypasses the state machine: no
+# retries, no alert. Without --cli-read-timeout the CLI gives up after 60 s and
+# invokes the function a second time.
 aws lambda invoke --function-name eskom-grid-transform --cli-read-timeout 310 `
   --profile eskom-admin --region af-south-1 response.json; cat response.json
 
@@ -265,8 +302,9 @@ times are stored in UTC, so add `INTERVAL 2 HOUR` for SAST.
 bucket holds the only copy of data the API cannot return again, so S3's refusal
 to delete a bucket that still holds data is kept as a safety catch.
 
-**A plain `terraform destroy`** removes the schedules, functions, roles, log
-groups and the ECR repository *with its images* (they are rebuilt from git,
+**A plain `terraform destroy`** removes the schedule, the state machine, the
+functions, roles and log groups, the alert topic, subscription and alarm, and
+the ECR repository *with its images* (they are rebuilt from git,
 [ADR 0008](docs/adr/0008-transform-image-deployed-by-digest.md)), then stops
 with `BucketNotEmpty`. The history is intact, but the bucket
 has lost its public access block, lifecycle rule and versioning;
@@ -289,14 +327,16 @@ terraform destroy
 ```
 
 Left in place on purpose: the SSM parameter holding the API key (created
-outside Terraform) and your local backup.
+outside Terraform), `infra/terraform.tfvars`, and your local backup.
 
 ### Rebuild and restore
 
 ```powershell
-# The same order as a first deployment: repository, image, everything else.
+# The same order as a first deployment: repository and alert subscription,
+# image, everything else. Confirm the subscription again when AWS emails you:
+# a rebuilt topic is a new topic.
 cd infra
-terraform apply "-target=aws_ecr_repository.transform"
+terraform apply "-target=aws_ecr_repository.transform" "-target=aws_sns_topic_subscription.alert_email"
 cd ..
 ./scripts/build_lambda.ps1
 ./scripts/build_transform_image.ps1 -Push
@@ -325,7 +365,10 @@ is derived entirely from `raw/`.
 ### API quota
 
 The EskomSePush free tier allows 50 requests per day. This deployment uses one
-request per area per run: two areas, hourly, is 48 per day. **Keep the local
+request per area per run: two areas, hourly, is 48 per day, so there is room
+for one extra run a day (a manual `start-execution`). A failed extract is
+therefore never retried: it is emailed, and the next hour is the retry
+([ADR 0009](docs/adr/0009-retry-only-failures-around-a-function.md)). **Keep the local
 Dagster schedule switched off while the cloud deployment is running** - both
 together would exceed the quota and the extraction would start failing with
 HTTP 429.
@@ -345,11 +388,12 @@ eskom-grid-cloud/
 ├── docs/
 │   ├── ROADMAP.md            phases, milestones, status
 │   └── adr/                  architecture decision records
-├── infra/                    Terraform — one file per concern        (Phase 1–2)
+├── infra/                    Terraform — one file per concern        (Phase 1–3)
 ├── functions/                thin Lambda entry points:               (Phase 1–2)
 │   ├── extract/              handler.py, shipped as a zip
 │   └── transform/            handler.py + Dockerfile, shipped as an image
 ├── .github/workflows/        plan on PR, apply on main               (Phase 4)
-└── scripts/                  build (zip, image + push), purge, look at the warehouse; smoke test (Phase 1–2, 5)
+└── scripts/                  build (zip, image + push), purge, look at the warehouse,
+                              check pipeline health; smoke test       (Phase 1–3, 5)
 ```
 WTC-PQ6WCN86

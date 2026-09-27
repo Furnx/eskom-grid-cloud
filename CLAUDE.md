@@ -112,24 +112,43 @@ Full teardown is `scripts/purge_bucket.ps1 -BackupPath <new folder>` (backs up,
 verifies every file by MD5, then asks for the bucket name), then `terraform
 destroy`; the README has the rebuild-and-restore steps.
 
-Open follow-up: Lambda's default async retries apply despite the schedule's
-retry 0 (Phase 3).
-
 Phase 2 complete as of 2026-09-26 (milestone: the 14:10 and 15:10 SAST runs
 each added a `fct_pipeline_runs` row). Both functions run app `v0.3.2`.
 `eskom-grid-transform` (container image in ECR repository
-`eskom-grid-transform`, deployed by digest, ADR 0008) runs at hh:10 and keeps
-`warehouse/eskom_data.duckdb`. `docs/PHASE2_PLAN.md` has the full record.
+`eskom-grid-transform`, deployed by digest, ADR 0008) runs straight after
+extract (since Phase 3) and keeps `warehouse/eskom_data.duckdb`. `docs/PHASE2_PLAN.md` has the full record.
 Deploying it: `./scripts/build_transform_image.ps1 -Push` (needs Docker
 Desktop; smoke tests run offline, read-only, without /dev/shm, through
 `run_transform()`; ~2 min from cache, ~13 min after an app change), which writes
 `build/transform_image_tag.txt` for the plan; then `terraform plan`/`apply`.
 The first deploy of an empty registry needs
 `terraform apply "-target=aws_ecr_repository.transform"` first (quoted in
-PowerShell). Avoid deploying in the minute a schedule fires (hh:00, hh:10).
+PowerShell). Avoid deploying between hh:00 and hh:01, while the hourly run goes.
 Key decisions: ADR 0006 (only new raw files are read - the cutoff must stay a
 literal on the file read), ADR 0007 (warehouse uploaded with an S3 conditional
 write), ADR 0008 (image pushed by script, deployed by digest).
 
-Next: Phase 3 (Step Functions extract -> transform, SNS alerting, retries owned
-by the state machine, handlers logging the app version). See docs/ROADMAP.md.
+Phase 3 complete as of 2026-09-27 (milestone: a deliberately broken API key
+was emailed within 2 s; after restoring it, the 16:00 run succeeded). The one
+schedule, `eskom-grid-hourly`, starts the Step Functions state machine
+`eskom-grid-pipeline` (4 states, JSONata; `infra/orchestration.tf`): Extract,
+then Transform, and on any error NotifyFailure (SNS publish) and RunFailed.
+Alerts go to SNS topic `eskom-grid-alerts`, one email subscription, plus the
+backstop alarm `eskom-grid-pipeline-failed` (`infra/monitoring.tf`). The address
+is the required variable `alert_email`, set in the git-ignored
+`infra/terraform.tfvars`; a first deploy also needs
+`"-target=aws_sns_topic_subscription.alert_email"` and a click on AWS's
+confirmation email. Both handlers log the app version first (read from package
+metadata; the build scripts refuse a mismatch with the tag).
+Key decisions: ADR 0009 (only failures around a function are retried: Lambda
+service errors, and the scheduler failing to start a run; never the handler's
+own errors - the API quota), ADR 0010 (failure branch plus alarm; the alarm
+turns green by itself ~15 min after a failure, so it sends no OK email).
+Test a definition change before applying: `aws stepfunctions
+validate-state-machine-definition` and `test-state --mock` on the definition
+from the plan (read-only; the plan file holds the alert address, so delete it
+after). `scripts/check_pipeline.ps1` gives a HEALTHY / FAILING / STALE / NOT
+RUNNING verdict.
+
+Next: Phase 4 (CI/CD: GitHub OIDC deploy role, Terraform state in S3, plan on
+pull requests, apply on merge). See docs/ROADMAP.md.
