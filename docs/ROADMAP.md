@@ -171,7 +171,12 @@ the 16:00 scheduled run succeeded.
 Goal: no human runs Terraform from a laptop; no AWS keys in GitHub.
 
 - [ ] GitHub OIDC identity provider + deploy role in IAM (least privilege for Terraform)
-- [ ] Terraform state moved to an S3 backend with locking
+- [x] Terraform state moved to an S3 backend with locking. Done 2026-09-27
+      ([ADR 0011](adr/0011-state-in-s3-and-a-bootstrap-configuration.md)): bucket
+      `eskom-grid-tfstate-<account>`, created by a separate `infra/bootstrap/`
+      configuration that CI never runs; the lock is a file beside the state
+      (`use_lockfile`), not a DynamoDB table. 37 resources moved, "No changes"
+      afterwards, and the first apply held the lock for its whole 61 s
 - [ ] `plan.yml`: `terraform fmt -check`, `validate`, `plan` on every pull request
 - [ ] `deploy.yml`: build and push the image, `terraform apply` on merge to `main`
 

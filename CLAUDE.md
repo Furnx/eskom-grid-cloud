@@ -47,10 +47,14 @@ It is **not** the application. No extraction logic, dbt models or tests live her
 ## Conventions
 
 - **Terraform** lives in `infra/`, one file per concern (`storage.tf`,
-  `compute.tf`, `orchestration.tf`, `iam.tf`, `secrets.tf`, `monitoring.tf`,
-  `github_oidc.tf`). Run `terraform fmt` and `terraform validate` before
-  committing. State is local and git-ignored until Phase 4, then an S3
-  backend. `.terraform.lock.hcl` **is** committed.
+  `compute.tf`, `registry.tf`, `orchestration.tf`, `iam.tf`, `monitoring.tf`).
+  What CI depends on (the state bucket and, from Phase 4, the GitHub OIDC
+  connection and CI's roles) lives in `infra/bootstrap/`, applied only from the
+  laptop, never by CI (ADR 0011). Run `terraform fmt` and `terraform validate`
+  before committing. State is in S3, bucket `eskom-grid-tfstate-433490648023`
+  (keys `infra/terraform.tfstate` and `bootstrap/terraform.tfstate`, lock file);
+  a fresh clone needs `terraform init -backend-config="profile=eskom-admin"` in
+  `infra/`. Both `.terraform.lock.hcl` files **are** committed.
 - **Never commit** `*.tfstate*`, `*.tfvars`, `.env`, or any secret.
 - **Lambda entry points** live in `functions/<name>/handler.py` and are thin:
   they call the application's functions and nothing else.
@@ -99,7 +103,7 @@ Phase 1 complete as of 2026-09-24 and deployed:
 `eskom-grid-433490648023` (S3), `eskom-grid-extract` (Lambda, app v0.3.2),
 `eskom-grid-hourly` (EventBridge Scheduler) - all live in af-south-1 and
 writing `raw/<area_id>/<ts>.json` every hour. Terraform state is local in
-`infra/terraform.tfstate` (git-ignored). Destroy → rebuild → restore was
+`infra/terraform.tfstate` until Phase 4 moved it to S3. Destroy → rebuild → restore was
 proven on 2026-09-24; Terraform never deletes the raw history (ADR 0005).
 
 Build before planning: `./scripts/build_lambda.ps1` (reads `app_version` from
@@ -150,5 +154,12 @@ from the plan (read-only; the plan file holds the alert address, so delete it
 after). `scripts/check_pipeline.ps1` gives a HEALTHY / FAILING / STALE / NOT
 RUNNING verdict.
 
-Next: Phase 4 (CI/CD: GitHub OIDC deploy role, Terraform state in S3, plan on
-pull requests, apply on merge). See docs/ROADMAP.md.
+Phase 4 (CI/CD) in progress. Decisions made 2026-09-27: a separate bootstrap
+configuration (ADR 0011); CI gets two roles, `eskom-grid-ci-plan`
+(ReadOnlyAccess, pull requests) and `eskom-grid-ci-deploy` (AdministratorAccess,
+`main` only), each with explicit denies for the Free Plan landmines, CI's own
+roles and reading the API key; apply runs automatically on merge; a pull
+request builds and smoke-tests a changed transform image without pushing it,
+and only a merge pushes it, then deploys it at once. Chunk 1 done 2026-09-27:
+state in S3 (37 resources, "No changes" after the move). Next: chunk 2 (checks
+and a plan on every pull request). See docs/ROADMAP.md.

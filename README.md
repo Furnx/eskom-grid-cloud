@@ -170,6 +170,29 @@ Prerequisites: AWS CLI v2 with the `eskom-admin` profile, Terraform >= 1.6,
 Python 3.13 with `pip`, Docker Desktop (the transform image is built locally
 for arm64), an EskomSePush API key, and an email address for failure alerts.
 
+### One-time: the bootstrap (where Terraform keeps its state)
+
+Terraform's state, its record of everything it manages, lives in an S3 bucket
+([ADR 0011](docs/adr/0011-state-in-s3-and-a-bootstrap-configuration.md)). That
+bucket is created by a small separate configuration, `infra/bootstrap/`, which
+is only ever applied from the laptop and keeps its own state in the bucket it
+creates. So the very first apply in an account starts on a local state and
+moves it in afterwards:
+
+```powershell
+cd infra/bootstrap
+Set-Content backend_override.tf 'terraform {', '  backend "local" {}', '}'
+terraform init
+terraform apply                 # the state bucket and its settings
+Remove-Item backend_override.tf
+terraform init -migrate-state   # answer yes: the state moves into the bucket
+cd ../..
+```
+
+The bucket is protected against `destroy`, and its name (with the account ID)
+is written into both configurations' `backend` blocks, which can't use
+variables. In another account, change both.
+
 ### One-time: store the API key
 
 The key is kept in SSM Parameter Store and is deliberately **not** managed by
@@ -206,9 +229,10 @@ alert_email = "you@example.com"
 #    - the alert topic and subscription: the state machine's definition names
 #      the topic, and AWS must confirm your address before it delivers anything.
 #    Create just those first. The quotes matter in PowerShell, which otherwise
-#    splits each argument at the dot.
+#    splits each argument at the dot. init names the laptop's profile for the
+#    S3 backend; it's needed once per clone.
 cd infra
-terraform init
+terraform init -backend-config="profile=eskom-admin"
 terraform apply "-target=aws_ecr_repository.transform" "-target=aws_sns_topic_subscription.alert_email"
 cd ..
 #    Then click the link in the "AWS Notification - Subscription Confirmation"
@@ -327,7 +351,9 @@ terraform destroy
 ```
 
 Left in place on purpose: the SSM parameter holding the API key (created
-outside Terraform), `infra/terraform.tfvars`, and your local backup.
+outside Terraform), the bootstrap and its state bucket (which still holds the
+now-empty state of the destroyed configuration), `infra/terraform.tfvars`, and
+your local backup.
 
 ### Rebuild and restore
 
