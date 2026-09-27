@@ -36,13 +36,15 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-$BuildDir = Join-Path $RepoRoot "build\lambda"
-$VersionFile = Join-Path $RepoRoot "build\app_version.txt"
-$FunctionDir = Join-Path $RepoRoot "functions\extract"
+# Forward slashes throughout: Windows accepts them, and on Linux (the CI
+# runners) a backslash is an ordinary character in a file name.
+$BuildDir = Join-Path $RepoRoot "build/lambda"
+$VersionFile = Join-Path $RepoRoot "build/app_version.txt"
+$FunctionDir = Join-Path $RepoRoot "functions/extract"
 $AppRepo = "https://github.com/Furnx/eskom-grid-observability"
 
 if (-not $AppVersion) {
-    $variables = Get-Content (Join-Path $RepoRoot "infra\variables.tf") -Raw
+    $variables = Get-Content (Join-Path $RepoRoot "infra/variables.tf") -Raw
     $match = [regex]::Match($variables, '(?s)variable\s+"app_version"\s*\{.*?default\s*=\s*"([^"]+)"')
     if (-not $match.Success) { throw "Could not read the app_version default from infra/variables.tf." }
     $AppVersion = $match.Groups[1].Value
@@ -60,8 +62,16 @@ if (Test-Path $BuildDir) { Remove-Item -Recurse -Force $BuildDir }
 if (Test-Path $VersionFile) { Remove-Item -Force $VersionFile }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
+# The same code must always give the same bytes: otherwise every build looks
+# like a code change to Terraform, and every CI run would redeploy the function.
+# So pip compiles no .pyc files (they record when they were compiled, and
+# Lambda can't write its own cache into the read-only package anyway), and the
+# command-line launchers it adds under bin/ are removed afterwards (on Windows
+# they are .exe files; on Linux they name the building machine's Python), along
+# with pip's RECORD lists, which name those launchers with their hashes. None
+# of these is ever read by the handler; the version check reads METADATA.
 Write-Host "[1/3] Installing eskom-grid@$AppVersion (no dependencies)..." -ForegroundColor Yellow
-pip install "git+$AppRepo@$AppVersion" --target $BuildDir --no-deps --quiet
+pip install "git+$AppRepo@$AppVersion" --target $BuildDir --no-deps --no-compile --quiet
 if ($LASTEXITCODE -ne 0) { throw "pip install of the application package failed." }
 
 Write-Host "[2/3] Installing Linux/arm64 dependency wheels..." -ForegroundColor Yellow
@@ -72,15 +82,23 @@ pip install `
     --python-version $PythonVersion `
     --implementation cp `
     --only-binary=:all: `
+    --no-compile `
     --quiet
 if ($LASTEXITCODE -ne 0) { throw "pip install of dependencies failed." }
+
+$launchers = Join-Path $BuildDir "bin"
+if (Test-Path $launchers) { Remove-Item -Recurse -Force $launchers }
+Get-ChildItem $BuildDir -Directory -Filter "*.dist-info" |
+    ForEach-Object { Join-Path $_.FullName "RECORD" } |
+    Where-Object { Test-Path $_ } |
+    Remove-Item -Force
 
 Write-Host "[3/3] Adding handler.py..." -ForegroundColor Yellow
 Copy-Item (Join-Path $FunctionDir "handler.py") -Destination $BuildDir
 
 # Smoke test: the things the handler imports must actually be in the package.
-$required = @("handler.py", "eskom_grid\extract.py", "eskom_grid\sinks.py",
-              "eskom_grid\config.py", "eskom_grid\areas_config.yml",
+$required = @("handler.py", "eskom_grid/extract.py", "eskom_grid/sinks.py",
+              "eskom_grid/config.py", "eskom_grid/areas_config.yml",
               "requests", "yaml")
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $BuildDir $_)) }
 if ($missing) { throw "Build is missing: $($missing -join ', ')" }
