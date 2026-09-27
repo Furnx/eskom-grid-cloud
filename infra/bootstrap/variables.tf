@@ -19,6 +19,12 @@ variable "project_name" {
   default     = "eskom-grid"
 }
 
+variable "github_repository" {
+  description = "The GitHub repository (owner/name) whose workflows may assume CI's roles."
+  type        = string
+  default     = "Furnx/eskom-grid-cloud"
+}
+
 variable "state_noncurrent_version_expiration_days" {
   description = <<-EOT
     How long superseded versions of a state file are kept. Every apply writes a
