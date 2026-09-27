@@ -46,11 +46,15 @@ resource "aws_cloudwatch_metric_alarm" "pipeline_failed" {
   comparison_operator = "GreaterThanOrEqualToThreshold"
   threshold           = 1
 
-  # Step Functions publishes this metric only when an execution fails, so most
-  # periods have no data at all. Here, no data means nothing failed.
+  # Step Functions publishes this metric as each run ends (0, or 1 for a
+  # failure), so between hourly runs most five-minute periods have no data.
+  # Here, no data means nothing failed.
   treat_missing_data = "notBreaching"
 
-  # No ok_actions: the alarm returns to OK five minutes after a failure, which
-  # says nothing about whether the next run succeeded. An email would mislead.
+  # No ok_actions. After a failure the alarm stays in ALARM only while the
+  # failed run's data point is inside the window CloudWatch looks back over,
+  # then returns to OK by itself: 15 minutes, measured on 2026-09-27. OK means
+  # "no failure recently", not "the next run succeeded", so an email would
+  # mislead. scripts/check_pipeline.ps1 answers "is it fixed?".
   alarm_actions = [aws_sns_topic.alerts.arn]
 }
