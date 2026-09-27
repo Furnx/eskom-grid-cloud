@@ -1,0 +1,114 @@
+# Deploys main (Phase 4, ADR 0012, 0013). Runs on every push to main, which
+# branch protection allows only by merging a pull request whose checks passed:
+# so a merge is the approval, and its plan was read on the pull request.
+#
+# It builds what the plan needs, pushes the transform image if its recipe is
+# new (ADR 0013: pushed only here, and deployed straight away), waits out the
+# hourly pipeline run, then plans and applies. A merge that changes nothing in
+# AWS ends with "No changes", which also shows main and AWS agree.
+#
+# Third-party actions are pinned to a full commit, as in plan.yml.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time, in order. A deploy is never cancelled halfway through;
+# a newer push waits for it to finish.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: af-south-1
+  AWS_ACCOUNT_ID: "433490648023"
+  TERRAFORM_VERSION: 1.16.2
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    # The deploy role trusts only jobs in this environment, and GitHub lets only
+    # protected branches (main) deploy to it.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TF_VAR_use_aws_profile: "false"
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/eskom-grid-ci-deploy
+          role-session-name: deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          mask-aws-account-id: false
+
+      - name: Build the extract package
+        shell: pwsh
+        run: ./scripts/build_lambda.ps1
+
+      # Finds this recipe's image in ECR, or builds, smoke-tests and pushes it.
+      - name: Find, or build and push, the transform image
+        shell: pwsh
+        run: ./scripts/build_transform_image.ps1 -Push -AwsProfile ""
+
+      # A pipeline run that starts while functions are being updated can get
+      # the old code (Lesson 26). The hourly run starts about 16 s past the hour
+      # and is over within a minute, so don't deploy between hh:58 and hh:02
+      # (the minute is the same in UTC and SAST), or while any run is going.
+      - name: Wait out the hourly pipeline run
+        run: |
+          state_machine="arn:aws:states:${AWS_REGION}:${AWS_ACCOUNT_ID}:stateMachine:eskom-grid-pipeline"
+          for _ in $(seq 1 40); do
+            minute=$((10#$(date -u +%M)))
+            # 0 if the state machine doesn't exist yet (a first deployment).
+            running=$(aws stepfunctions list-executions --state-machine-arn "$state_machine" \
+              --status-filter RUNNING --query 'length(executions)' --output text 2>/dev/null || echo 0)
+            if [ "$minute" -ge 2 ] && [ "$minute" -lt 58 ] && [ "$running" = "0" ]; then
+              echo "Clear to deploy (minute $minute, no run in progress)."
+              exit 0
+            fi
+            echo "Waiting: minute $minute, $running run(s) in progress."
+            sleep 30
+          done
+          echo "Still not clear after 20 minutes; giving up without changing anything." >&2
+          exit 1
+
+      - name: Plan
+        run: |
+          terraform -chdir=infra init
+          terraform -chdir=infra plan -no-color -out=tfplan
+          terraform -chdir=infra show -no-color tfplan > plan.txt
+          {
+            echo "## Deploy of ${GITHUB_SHA::7}"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Applies exactly the plan above: Terraform refuses a saved plan if the
+      # state changed in between.
+      - name: Apply
+        run: terraform -chdir=infra apply -no-color tfplan

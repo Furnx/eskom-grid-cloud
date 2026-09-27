@@ -1,3 +1,8 @@
+output "ci_deploy_role_arn" {
+  description = "Role the deploy workflow assumes (named in .github/workflows/deploy.yml)."
+  value       = aws_iam_role.ci_deploy.arn
+}
+
 output "ci_plan_role_arn" {
   description = "Role that pull-request workflows assume (named in .github/workflows/plan.yml)."
   value       = aws_iam_role.ci_plan.arn

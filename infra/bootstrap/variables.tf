@@ -33,6 +33,16 @@ variable "github_subject" {
   default     = "repo:Furnx@89989017/eskom-grid-cloud@1379288500"
 }
 
+variable "github_deploy_environment" {
+  description = <<-EOT
+    The GitHub environment the deploy workflow runs in. The deploy role trusts
+    only jobs in it, and GitHub lets only protected branches (main) deploy to
+    it. Created once in the repository's settings (see the README).
+  EOT
+  type        = string
+  default     = "production"
+}
+
 variable "state_noncurrent_version_expiration_days" {
   description = <<-EOT
     How long superseded versions of a state file are kept. Every apply writes a
