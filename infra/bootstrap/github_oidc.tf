@@ -38,13 +38,14 @@ data "aws_iam_policy_document" "ci_plan_trust" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Only runs for a pull request in this repository. (GitHub gives a pull
-    # request from someone's fork read-only permissions, so it can't request a
-    # token in the first place.)
+    # Only runs for a pull request in this repository, named the way GitHub
+    # names it in tokens (var.github_subject). GitHub gives a pull request
+    # from someone's fork read-only permissions, so it can't request a token
+    # in the first place.
     condition {
       test     = "StringEquals"
       variable = "${local.github_token_issuer}:sub"
-      values   = ["repo:${var.github_repository}:pull_request"]
+      values   = ["${var.github_subject}:pull_request"]
     }
   }
 }

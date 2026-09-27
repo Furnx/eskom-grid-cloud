@@ -19,10 +19,18 @@ variable "project_name" {
   default     = "eskom-grid"
 }
 
-variable "github_repository" {
-  description = "The GitHub repository (owner/name) whose workflows may assume CI's roles."
+variable "github_subject" {
+  description = <<-EOT
+    How GitHub names this repository in its OIDC tokens: the start of the "sub"
+    claim that CI's trust policies match. Repositories created since July 2026
+    get immutable subjects, where the owner's and the repository's ID numbers
+    follow their names (Furnx@89989017/eskom-grid-cloud@1379288500), so a
+    repository deleted and re-created under the same name gets new IDs and
+    can't use these roles. Read it from GitHub, never from memory:
+      gh api repos/Furnx/eskom-grid-cloud/actions/oidc/customization/sub
+  EOT
   type        = string
-  default     = "Furnx/eskom-grid-cloud"
+  default     = "repo:Furnx@89989017/eskom-grid-cloud@1379288500"
 }
 
 variable "state_noncurrent_version_expiration_days" {
