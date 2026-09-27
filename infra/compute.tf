@@ -13,6 +13,12 @@ data "archive_file" "extract" {
   type        = "zip"
   source_dir  = "${path.module}/../build/lambda"
   output_path = "${path.module}/../build/extract.zip"
+
+  # The same permissions for every file, whichever system built the package,
+  # so a Windows build and a Linux build of the same code zip identically.
+  # (The zip already ignores file times; the build script makes the contents
+  # reproducible.)
+  output_file_mode = "0644"
 }
 
 # Declared explicitly rather than left to Lambda, which would create it on first
@@ -68,10 +74,10 @@ resource "aws_lambda_function" "extract" {
 
 # ── The transform function (Phase 2) ─────────────────────────────────────────
 #
-# A container image this time. scripts/build_transform_image.ps1 -Push builds
-# it, pushes it to ECR (registry.tf) and records the tag it pushed in
-# build/transform_image_tag.txt. Terraform looks that tag up in ECR and deploys
-# the image by its digest.
+# A container image this time. scripts/build_transform_image.ps1 finds the
+# image for the current recipe in ECR, or builds it (and with -Push pushes it),
+# and records its tag in build/transform_image_tag.txt. Terraform looks that
+# tag up in ECR and deploys the image by its digest.
 
 locals {
   transform_function_name = "${var.project_name}-transform"
@@ -84,19 +90,28 @@ locals {
   transform_image_tag = try(trimspace(file("${path.module}/../build/transform_image_tag.txt")), "")
 }
 
-# Resolves the tag to the image's digest, and fails the plan if the tag was
-# never pushed. Tags cannot be moved (registry.tf), but the digest is what gets
-# deployed: it names the exact bytes, and the function's record then shows them.
-data "aws_ecr_image" "transform" {
+# Every image in the repository, each with its tag. Looking the one tag up
+# instead would fail the plan whenever that tag isn't in ECR yet, which is
+# exactly the case in a pull request that changes the recipe (ADR 0013).
+data "aws_ecr_images" "transform" {
   repository_name = aws_ecr_repository.transform.name
-  image_tag       = local.transform_image_tag
 
   lifecycle {
     precondition {
       condition     = startswith(local.transform_image_tag, "${var.app_version}-")
-      error_message = "build/transform_image_tag.txt is missing or was not pushed from app_version ${var.app_version}. Run ./scripts/build_transform_image.ps1 -Push and plan again."
+      error_message = "build/transform_image_tag.txt is missing or was not made from app_version ${var.app_version}. Run ./scripts/build_transform_image.ps1 (with -Push to deploy) and plan again."
     }
   }
+}
+
+locals {
+  # The digest of the recorded tag, or null if that image isn't in ECR. Tags
+  # cannot be moved (registry.tf), but the digest is what gets deployed: it
+  # names the exact bytes, and the function's record then shows them.
+  transform_image_digest = one([
+    for image in data.aws_ecr_images.transform.image_ids : image.image_digest
+    if image.image_tag == local.transform_image_tag
+  ])
 }
 
 resource "aws_cloudwatch_log_group" "transform" {
@@ -112,7 +127,14 @@ resource "aws_lambda_function" "transform" {
   # No handler or runtime settings: the image carries both (its base image and
   # its CMD).
   package_type = "Image"
-  image_uri    = "${aws_ecr_repository.transform.repository_url}@${data.aws_ecr_image.transform.image_digest}"
+
+  # By digest (ADR 0008). Only a pull request's preview may name an image that
+  # isn't pushed yet (the merge pushes it before planning); it does so by tag.
+  image_uri = (
+    local.transform_image_digest != null
+    ? "${aws_ecr_repository.transform.repository_url}@${local.transform_image_digest}"
+    : "${aws_ecr_repository.transform.repository_url}:${local.transform_image_tag}"
+  )
 
   # Fixed rather than var.lambda_architecture: the image is only ever built for
   # linux/arm64, and a mismatch would only surface at the first invocation.
@@ -136,4 +158,12 @@ resource "aws_lambda_function" "transform" {
     aws_cloudwatch_log_group.transform,
     aws_ecr_repository_policy.transform,
   ]
+
+  lifecycle {
+    # Any plan that may be applied must deploy an image that exists, by digest.
+    precondition {
+      condition     = local.transform_image_digest != null || !var.require_pushed_image
+      error_message = "The transform image ${local.transform_image_tag} is not in ECR. Run ./scripts/build_transform_image.ps1 -Push and plan again."
+    }
+  }
 }

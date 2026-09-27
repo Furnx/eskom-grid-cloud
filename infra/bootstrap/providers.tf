@@ -3,7 +3,7 @@
 #
 #   state.tf        the bucket that holds Terraform's state, both this
 #                   configuration's and the main one's
-#   (Phase 4 adds)  the GitHub OIDC connection and CI's two roles
+#   github_oidc.tf  the GitHub OIDC connection and CI's roles
 #
 # Applied from the laptop by the account admin, rarely. Never by CI: a
 # configuration that managed the role it runs as could widen its own

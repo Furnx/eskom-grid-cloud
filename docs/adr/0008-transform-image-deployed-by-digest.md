@@ -1,7 +1,7 @@
 # 0008. The transform image is pushed by a script and deployed by digest
 
 Date: 2026-09-25
-Status: Accepted
+Status: Accepted; superseded in part by [0013](0013-transform-image-tagged-by-recipe.md) (the tag format and who pushes)
 
 Recorded 2026-09-26, the day after the decision, once the first deployments had
 exercised it.

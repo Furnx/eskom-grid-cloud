@@ -1,0 +1,137 @@
+# Checks every pull request into main: formatting, validity, and a plan of what
+# merging it would change in AWS (Phase 4, ADR 0012). Nothing here can change
+# anything: the role it signs in as is read-only, and the plan is only shown.
+#
+# Third-party actions are pinned to a full commit, not a tag: a tag can be moved
+# to other code later, a commit can't. The comment says which release it is.
+
+name: plan
+
+on:
+  pull_request:
+    branches: [main]
+
+# A newer push to the same pull request replaces a run still in progress.
+concurrency:
+  group: plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: af-south-1
+  AWS_ACCOUNT_ID: "433490648023"
+  TERRAFORM_VERSION: 1.16.2
+  # Tells Terraform no one is at the keyboard: no prompts, no hints to type
+  # commands.
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  checks:
+    name: fmt and validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The job never pushes, so GitHub's token needn't stay on disk.
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Formatting
+        run: terraform fmt -check -recursive -diff infra
+
+      # -backend=false: validating needs the providers, not the state.
+      - name: Validate infra
+        run: |
+          terraform -chdir=infra init -backend=false
+          terraform -chdir=infra validate
+
+      - name: Validate infra/bootstrap
+        run: |
+          terraform -chdir=infra/bootstrap init -backend=false
+          terraform -chdir=infra/bootstrap validate
+
+  plan:
+    name: plan
+    needs: checks
+    # arm64, like the functions: the transform image builds natively instead of
+    # under emulation. Free, as all GitHub-hosted runners are for a public
+    # repository.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Lets the job ask GitHub for the token that signs it in to AWS.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      # OIDC: GitHub vouches for this run ("a pull request in
+      # Furnx/eskom-grid-cloud"), and AWS answers with short-lived credentials
+      # for the read-only role, which only such runs may assume (bootstrap).
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/eskom-grid-ci-plan
+          role-session-name: plan-pr-${{ github.event.pull_request.number }}
+          aws-region: ${{ env.AWS_REGION }}
+          # Stop at once if the credentials belong to any other account.
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          # The account ID is already public (README); masking it would only
+          # turn every ARN in the plan into ***.
+          mask-aws-account-id: false
+
+      # The same scripts the laptop uses, so CI can't drift from them.
+      - name: Build the extract package
+        shell: pwsh
+        run: ./scripts/build_lambda.ps1
+
+      # Finds this recipe's image in ECR, or builds and smoke-tests it. It never
+      # pushes: only a merge does, straight before deploying (ADR 0013).
+      - name: Find or build the transform image
+        shell: pwsh
+        run: ./scripts/build_transform_image.ps1 -AwsProfile ""
+
+      - name: Plan
+        env:
+          TF_VAR_use_aws_profile: "false"
+          # A changed recipe's image isn't in ECR yet, so the plan names it by tag.
+          TF_VAR_require_pushed_image: "false"
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+        run: |
+          terraform -chdir=infra init
+          # -lock=false: a plan writes nothing, and this role may not write the lock.
+          terraform -chdir=infra plan -lock=false -no-color -out=tfplan
+          terraform -chdir=infra show -no-color tfplan > plan.txt
+
+      # The plan on the run's summary page, which the pull request links to.
+      # Sensitive values (the alert address) show as "(sensitive value)".
+      - name: Summary
+        run: |
+          {
+            echo "## Plan for pull request #${{ github.event.pull_request.number }}"
+            echo
+            echo "Read-only: nothing in AWS has changed."
+            echo "A transform image named by tag (\`…:<tag>\`) rather than by digest (\`…@sha256:…\`)"
+            echo "is a new recipe: built and smoke-tested here, pushed and deployed on merge."
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

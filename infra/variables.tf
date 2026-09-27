@@ -13,6 +13,17 @@ variable "aws_profile" {
   default     = "eskom-admin"
 }
 
+variable "use_aws_profile" {
+  description = <<-EOT
+    Whether the provider signs in with the profile above. True on the laptop.
+    CI sets it to false (TF_VAR_use_aws_profile): a runner has no profiles, and
+    its short-lived credentials arrive in environment variables instead.
+    aws_profile itself stays, because the verify_commands output names it.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "project_name" {
   description = "Name prefix and project tag for every resource."
   type        = string
@@ -125,6 +136,18 @@ variable "transform_timeout_seconds" {
   EOT
   type        = number
   default     = 300
+}
+
+variable "require_pushed_image" {
+  description = <<-EOT
+    Whether the plan refuses a transform image that isn't in ECR yet. True
+    wherever a plan may be applied. A pull request's plan sets it to false
+    (TF_VAR_require_pushed_image): when its recipe changed, the image is built
+    and tested but only pushed on merge, so the preview names it by tag
+    (ADR 0013).
+  EOT
+  type        = bool
+  default     = true
 }
 
 variable "warehouse_noncurrent_version_expiration_days" {
