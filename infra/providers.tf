@@ -4,7 +4,8 @@
 # committed — that file, not these constraints, is what makes builds reproducible.
 
 terraform {
-  required_version = ">= 1.6"
+  # use_lockfile (below) needs 1.11 or later.
+  required_version = ">= 1.11"
 
   required_providers {
     aws = {
@@ -17,7 +18,22 @@ terraform {
     }
   }
 
-  # State is local and git-ignored until Phase 4, when it moves to an S3 backend.
+  # State lives in S3 (ADR 0011), in the bucket infra/bootstrap creates, so the
+  # laptop and a CI runner share one memory of what exists. While a run is
+  # changing things, use_lockfile keeps a lock file beside the state
+  # (infra/terraform.tfstate.tflock), so two runs can't write at once.
+  #
+  # A backend can't use variables, hence the literal names. No profile here:
+  # CI brings its credentials in environment variables, and the laptop names
+  # its profile once, when it initialises:
+  #   terraform init -backend-config="profile=eskom-admin"
+  backend "s3" {
+    bucket       = "eskom-grid-tfstate-433490648023"
+    key          = "infra/terraform.tfstate"
+    region       = "af-south-1"
+    use_lockfile = true
+    encrypt      = true
+  }
 }
 
 provider "aws" {
