@@ -221,7 +221,9 @@ if ($LASTEXITCODE -ne 0) { throw "Smoke test failed for $image (dbt build throug
 $sizeMb = [math]::Round((docker image inspect $image --format "{{.Size}}") / 1MB)
 
 Write-Host ""
-Write-Host "Build complete: $image ($sizeMb MB compressed)." -ForegroundColor Green
+# As Docker reports it: the compressed size on the laptop's Docker Desktop,
+# the unpacked size on a CI runner (about 265 and 730 MB for the same image).
+Write-Host "Build complete: $image ($sizeMb MB as reported by Docker)." -ForegroundColor Green
 
 if (-not $Push) {
     # Tested, so a plan may preview it; not pushed, so a plan that insists on
