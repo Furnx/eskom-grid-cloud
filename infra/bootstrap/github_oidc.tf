@@ -87,3 +87,141 @@ resource "aws_iam_role_policy" "ci_plan_denies" {
   role   = aws_iam_role.ci_plan.id
   policy = data.aws_iam_policy_document.ci_plan_denies.json
 }
+
+# ── The deploy role: main only, broad, with explicit denies ───────────────────
+
+data "aws_iam_policy_document" "ci_deploy_trust" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_token_issuer}:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+
+    # Only jobs that run in the GitHub environment named here, which GitHub
+    # lets protected branches (main) deploy to and nothing else. A pull request
+    # or any other branch presents a different subject.
+    condition {
+      test     = "StringEquals"
+      variable = "${local.github_token_issuer}:sub"
+      values   = ["${var.github_subject}:environment:${var.github_deploy_environment}"]
+    }
+  }
+}
+
+resource "aws_iam_role" "ci_deploy" {
+  name               = "${var.project_name}-ci-deploy"
+  description        = "Assumed by GitHub Actions to deploy main: AdministratorAccess minus explicit denies (ADR 0012)."
+  assume_role_policy = data.aws_iam_policy_document.ci_deploy_trust.json
+}
+
+# The main configuration manages S3, Lambda, ECR, Step Functions, Scheduler,
+# SNS, CloudWatch and IAM roles, so the role that applies it needs wide rights,
+# IAM included; AWS's ready-made policy for that is AdministratorAccess
+# (ADR 0012). What it must never do is denied below, and a deny always wins.
+resource "aws_iam_role_policy_attachment" "ci_deploy_admin" {
+  role       = aws_iam_role.ci_deploy.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+data "aws_iam_policy_document" "ci_deploy_denies" {
+  # Everything the plan role is denied (reading parameters, so the API key)...
+  source_policy_documents = [data.aws_iam_policy_document.ci_plan_denies.json]
+
+  # ...and what would end the Free Plan and its credits at once (ADR 0003),
+  # with the other account-wide services a deploy never needs.
+  statement {
+    sid    = "NeverTouchTheAccountOrItsBilling"
+    effect = "Deny"
+    actions = [
+      "organizations:*",
+      "controltower:*",
+      "account:*",
+      "aws-marketplace:*",
+      "savingsplans:*",
+      "supportplans:*",
+      "billing:*",
+      "payments:*",
+      "freetier:*",
+      "ec2:Purchase*",
+      "rds:PurchaseReserved*",
+      "elasticache:PurchaseReserved*",
+      "redshift:PurchaseReserved*",
+      "dynamodb:PurchaseReserved*",
+      "es:PurchaseReserved*",
+      "memorydb:PurchaseReserved*",
+    ]
+    resources = ["*"]
+  }
+
+  # CI's own identity belongs to this bootstrap, applied from the laptop: CI
+  # may not widen its own rights, or break the way it signs in.
+  statement {
+    sid     = "NeverChangeCiIdentity"
+    effect  = "Deny"
+    actions = ["iam:*"]
+    resources = [
+      aws_iam_openid_connect_provider.github.arn,
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${var.project_name}-ci-*",
+    ]
+  }
+
+  # Users, access keys and passwords would outlive any workflow run: a way to
+  # keep access after the run's credentials expire. Nothing here needs them.
+  statement {
+    sid    = "NeverCreateLongLivedCredentials"
+    effect = "Deny"
+    actions = [
+      "iam:CreateUser",
+      "iam:CreateAccessKey",
+      "iam:CreateLoginProfile",
+      "iam:UpdateLoginProfile",
+    ]
+    resources = ["*"]
+  }
+
+  # The state bucket's settings, and the bootstrap's own state, belong to this
+  # configuration. CI only reads and writes the main configuration's state
+  # (infra/terraform.tfstate and its lock file).
+  statement {
+    sid    = "NeverChangeTheStateBucket"
+    effect = "Deny"
+    actions = [
+      "s3:DeleteBucket*",
+      "s3:PutBucket*",
+      "s3:PutLifecycleConfiguration",
+      "s3:PutEncryptionConfiguration",
+    ]
+    resources = [aws_s3_bucket.tfstate.arn]
+  }
+
+  statement {
+    sid       = "NeverWriteTheBootstrapState"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+    resources = ["${aws_s3_bucket.tfstate.arn}/bootstrap/*"]
+  }
+
+  # The raw history is the project's reason to exist, and the API can't return
+  # it again (ADR 0005). Terraform never writes or deletes an object in raw/.
+  statement {
+    sid       = "NeverRewriteRawHistory"
+    effect    = "Deny"
+    actions   = ["s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+    resources = ["arn:aws:s3:::${var.project_name}-${data.aws_caller_identity.current.account_id}/raw/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ci_deploy_denies" {
+  name   = "${var.project_name}-ci-deploy-denies"
+  role   = aws_iam_role.ci_deploy.id
+  policy = data.aws_iam_policy_document.ci_deploy_denies.json
+}
